@@ -270,3 +270,48 @@ out of scope until the live/paper path is proven or fails.
 credential to the NestJS database (`fcsousa/maxxtrading`'s own Postgres, a
 separate host/DB from `maxxtrading-scoreengine`) to run the hash-match
 proof on real `signal_scores` rows.
+
+### Finding TF-3 (open, 2026-08-01) — no usable feature data exists yet, on either path
+
+DB access resolved: `SCOREENGINE_READONLY_DATABASE_URL` (`.env`, host
+`192.168.3.10:5432`, DB `maxxtrading` — distinct from
+`maxxtrading-scoreengine`) is a read-only credential to the real NestJS
+database (confirmed: `signal_scores`, `trade_samples`, `orders`, `signals`,
+`indicator_packs`, `indicator_pack_runs` all present in `public`, matching
+the Prisma schema exactly). Used only for aggregate `COUNT(*)`/`GROUP BY`
+queries below — no row content was read or logged.
+
+**Both feature paths are currently empty, not just methodologically
+unresolved:**
+
+| Check | Result |
+| --- | --- |
+| `signal_scores` (any) | **0 rows** — confirms Phase 0's OF-1: no signal has ever actually been scored online |
+| `trade_samples` (any) | 372 rows |
+| `trade_samples` by `(source_type, sample_quality, result_label)` | **100% `historical_import` / `complete`** — 201 `win`, 171 `loss`. Zero `live_order`/`paper_order` samples exist at all |
+| `trade_samples.entry_indicator_pack_id IS NOT NULL` | **0 of 372** — not one historical sample is linked to a pack |
+| `indicator_packs.current_status` | 372 `pending`, 2 `succeeded`, 2 `failed_terminal` (of 376 total) |
+| `indicator_packs` with `current_pack_json` populated | 2 (both unlinked to any `trade_sample`) |
+
+**Implication**: the revised A* path (`signal_scores.request_json`) has
+zero applicable rows — not a proof gap, a data gap (nothing has ever been
+scored online). The fallback path (`indicator_packs`/`indicator_pack_runs`)
+also has zero usable rows for the population that actually exists
+(historical_import): indicator-pack computation for these 372 samples is
+stuck at `pending` and was never linked back via `entry_indicator_pack_id`.
+**There is currently no feature data anywhere in the system for any of the
+372 labeled samples this repo could otherwise train on.**
+
+This is an operational/NestJS-side gap (the indicator-pack backfill job for
+historical imports needs to actually run and link `entry_indicator_pack_id`
+back to `trade_samples`), not a Score-Engine or training-repo code problem,
+and out of scope for this repo to fix directly.
+
+**Owner**: fcsousa. **Blocks**: all of T6b/T7-with-real-features/T8's real
+run, regardless of how A* resolves — there is nothing to export yet either
+way.
+
+**A* status update**: still PENDING (not PASS, not FAIL) — the code-level
+hash-compatibility reasoning stands, but it cannot be exercised because no
+`signal_scores` row exists to test against. This isn't a rejection of the
+hypothesis, just an unmet precondition.
