@@ -1,0 +1,42 @@
+# Python / virtualenv
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# Test / lint caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+
+# ML artifacts and runs
+mlruns/
+artifacts/
+*.pkl
+*.joblib
+
+# Build / coverage
+dist/
+build/
+coverage/
+htmlcov/
+.cache/
+
+# Datasets and exports (never committed — read-only, regenerated from source)
+data/
+datasets/
+exports/
+manifests/
+
+# Logs
+logs/
+*.log
+tmp/
+temp/
+
+# Env
+.env
+.env.*
+!.env.example
