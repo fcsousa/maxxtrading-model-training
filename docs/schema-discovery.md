@@ -181,3 +181,92 @@ assumed:
 - If parity fails or can't be evidenced, fall back to **(B)** offline
   reconstruction or **(C)** wait for a materialized ACL table — in that
   order of preference, per the original trade-offs above.
+
+### A* parity study (2026-08-01, code-level — no live DB access)
+
+Source: `fcsousa/maxxtrading` (NestJS) @ read-only clone, same commit family
+as `65ebecd`.
+
+**Revised recommendation — bypass `indicator_packs` for scored live/paper
+trades.** Reading `prisma/schema.prisma`'s `SignalScore` model changes the
+picture from the original A* framing (which assumed features had to be
+reconstructed from `IndicatorPack`):
+
+```
+model SignalScore {
+  ...
+  featuresVersion String
+  featuresHash    String
+  requestJson     Json   // NOT NULL — literal ScoreRequest sent online
+  responseJson    Json?
+  outcome         SignalScoreOutcome  // ok | timeout | error | schema_invalid
+  @@unique([signalId, modelVersion, featuresVersion, featuresHash, scoreMode])
+}
+```
+
+`src/modules/score-models/signal-score.service.ts:76-95` shows `requestJson`
+is persisted **verbatim** from the `ScoreRequest` object built by
+`buildScoreRequest` (`score-request-builder.util.ts`), only when
+`outcome === 'ok'`. `request.featuresHash` (same object) is stored in the
+`featuresHash` column. Both are frozen at the moment of the real online
+`/v1/score` call and never touched again — no mutability/reprocessing risk
+(unlike `IndicatorPack.currentPackJson`/`lastSuccessfulPackJson`, TF-2).
+
+**Revised A\*\*\* for scored live/paper**: read `signal_scores.request_json`
+directly as the feature source (`request_json.features`) for any row with
+`outcome = 'ok'`, instead of reconstructing from `indicator_packs`. Join path
+(same as TF-2's confirmed link): `trade_samples.order_id → orders.id →
+orders.signal_id (signals.id PK) → signal_scores.signal_id`.
+
+**Cross-language hash compatibility (verified at code level):**
+
+- NestJS: `computeFeaturesHash` (`features-hash.util.ts`) = `sha256(stableStringify(features))`,
+  keys sorted, no whitespace, JS `JSON.stringify` per-value.
+- Score Engine (Python, AD-007): `app/domain/services/features_hash.py` =
+  `sha256(json.dumps(features, sort_keys=True, separators=(",", ":")))`.
+- Both algorithms are structurally identical (sorted-key, no-whitespace
+  canonical JSON, SHA-256 hex). The one cross-language risk is number
+  rendering (Python `float` renders integer values with a trailing `.0`;
+  JS numbers never do). This is a **non-issue here**: the Score Engine's
+  request schema declares `features: dict[str, Any]`
+  (`app/schemas/score_request.py:29`) — no Pydantic float coercion — so a
+  whole-number value arrives over the wire as JSON `1` (JS never emits
+  `1.0`), `json.loads` parses it as Python `int`, and `json.dumps` renders
+  it back as `"1"`, matching JS's own rendering. Fractional values use each
+  language's shortest-round-trip float formatting, which converge for the
+  same IEEE-754 double. **No known case where the two hashes would diverge
+  for equal feature values.**
+
+**Status: PENDING, not PASS.** The hash algorithms are proven compatible at
+the code level, and `request_json`/`features_hash` are proven immutable and
+verified by construction (§ above). What's still missing is (a) required by
+the gate: an actual hash-match run against ≥1 real `signal_scores` row —
+recompute `compute_features_hash(request_json["features"])` in Python and
+confirm it equals the stored `features_hash` column. This requires read
+access to the **NestJS database** (not the Score Engine's — confirmed
+separate; this session's `scoreengine_readonly` credential got
+`FATAL: no pg_hba.conf entry` when it tried the NestJS host). No T6b SQL
+will be written until this runs and passes on real data, or is written up
+as a FAIL with a concrete blocker.
+
+**Historical_import gap (unresolved, separate from live/paper):** rows with
+no live order/signal (per TF-2 point 5) have no `signal_scores` row at all —
+they were never scored online. `request_json` cannot help there. If those
+rows are needed for training, feature reconstruction falls back to
+`IndicatorPackRun` (see below) or is excluded from V1 (a scope decision, not
+made here).
+
+**`IndicatorPackRun` — reconstruction fallback / audit only, not primary
+path.** For any case where `signal_scores.request_json` isn't available
+(historical_import rows, or a live/paper trade whose `SignalScore` row is
+missing/non-`ok`), the immutable per-attempt history in `IndicatorPackRun`
+(`packJson`, `startedAt`, `trigger`, `attemptNumber` — unlike the mutable
+`IndicatorPack.currentPackJson`/`lastSuccessfulPackJson`, TF-2) is the
+correct join target, but which specific run corresponds to "the one that
+would have produced this signal's request" has not been established and is
+out of scope until the live/paper path is proven or fails.
+
+**Next step (blocked on DB access, do not skip)**: obtain a read-only
+credential to the NestJS database (`fcsousa/maxxtrading`'s own Postgres, a
+separate host/DB from `maxxtrading-scoreengine`) to run the hash-match
+proof on real `signal_scores` rows.
