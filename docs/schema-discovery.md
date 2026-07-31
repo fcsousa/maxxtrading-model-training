@@ -162,3 +162,22 @@ evidence, before writing feature-export SQL)**:
   raw price/indicator history rather than reading NestJS's stored packs).
 - **(C)** Wait for NestJS to materialize a stable `trading.signal_features`-
   shaped ACL table; export against that once it exists and is contracted.
+
+### Decision (2026-08-01, fcsousa): A\* adopted, B/C as contingency
+
+Read `indicator_packs` directly (option A), but gated on validation, not
+assumed:
+
+- **T6 now**: export **labels only** from `trade_samples`/`historical_trades`
+  (per `label-policy.md` §2-3). No feature/`indicator_packs` read yet.
+- **Feature export unblocks only after** evidence that `indicator_packs`
+  content (`current_pack_json`/`last_successful_pack_json` reached via
+  `entry_indicator_pack_id`) has **parity with what NestJS's
+  `ScoreRequestBuilder` actually sends as `features` in a live
+  `POST /v1/score` request** — same keys, same values, snapshotted at/before
+  `entry_at` (no post-entry leakage). Validate against an **immutable run**
+  (a specific pinned historical signal + its real request payload), not a
+  live/moving comparison.
+- If parity fails or can't be evidenced, fall back to **(B)** offline
+  reconstruction or **(C)** wait for a materialized ACL table — in that
+  order of preference, per the original trade-offs above.
