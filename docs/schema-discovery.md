@@ -120,3 +120,45 @@ Label derivation in NestJS (not “TP before SL” as a stored predicate):
 ## Output
 
 Findings applied to `docs/label-policy.md` §1–4.
+
+## Finding TF-2 (open) — label↔feature join is UNKNOWN/REJECTED
+
+**Do not** join `trade_samples`/`historical_trades` (label source, §1b) back
+to `trading.trading_signals`/`trading.signal_features` (the Score Engine's
+feature-source assumption in `docs/trading_read_contract.md`) via
+`trade_samples.correlation_id = trading_signals.signal_id`. That join is
+rejected, not just undocumented:
+
+1. `trading.trading_signals`/`signal_features`/`trade_outcomes` don't exist
+   in NestJS (§1b) — there is no destination table for this join anyway.
+2. `correlation_id` is a request-tracing id, not a business `signal_id`;
+   `signals.signal_id`, `signals.correlation_id`,
+   `trade_samples.correlation_id`, and `orders.correlation_id` are distinct
+   columns on/around the same NestJS `Signal` model.
+3. The only real link (live/paper only) is
+   `trade_samples.order_id → orders.id → orders.signal_id → signals.id`
+   (`orders.signal_id` is the `signals` **cuid PK**, not the business
+   `signal_id`).
+4. NestJS features live in `indicator_packs`
+   (`current_pack_json`/`last_successful_pack_json`), linked via
+   `trade_samples.entry_indicator_pack_id` and/or
+   `indicator_packs.trade_sample_id`/`indicator_packs.signal_id` —
+   `TradeSampleFeatureReader` builds windows from other `trade_samples`
+   rows, not from a `trading.*` store.
+5. `historical_import` rows frequently have no live order/signal at all
+   (only `historical_trade_id` + an optional pack) — any join that requires
+   `signals` silently drops or misrepresents that volume.
+
+**Owner**: fcsousa. **Blocks**: the feature side of T6 (and therefore T7).
+**Does not block**: exporting labels alone from `trade_samples` per
+`label-policy.md` (no `trading.*` join required for that slice).
+
+**Options for the feature-join decision (none adopted — pick one, with
+evidence, before writing feature-export SQL)**:
+
+- **(A)** Read `indicator_packs` directly in the training-repo exporter
+  (NestJS schema, still read-only).
+- **(B)** Reconstruct features offline in the training repo (recompute from
+  raw price/indicator history rather than reading NestJS's stored packs).
+- **(C)** Wait for NestJS to materialize a stable `trading.signal_features`-
+  shaped ACL table; export against that once it exists and is contracted.
