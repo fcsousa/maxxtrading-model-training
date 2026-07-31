@@ -343,3 +343,50 @@ because none of them have `order_id` set at all. The 12 samples that *do*
 have an order link are `partial` quality and excluded from training by
 `label-policy.md` §2 regardless. TF-3's blocker stands: no feature data
 exists for any currently-eligible training sample, on any path.
+
+### TF-3 correction (2026-08-01, same session) — the order/signal join was the wrong join for historical_import
+
+The zero-intersection conclusion above checked `entry_indicator_pack_id`
+and the `order_id → orders.signal_id → indicator_packs.signal_id` path
+(TF-2's confirmed link for **live/paper** trades). Both are correctly empty
+for `historical_import` rows, but that's because neither applies to them —
+not because no feature data exists. `IndicatorPack` has a **second,
+independent** FK not checked before: `trade_sample_id`
+(`subject_type = 'trade_sample'` in the enum), a direct pack↔sample
+relation that doesn't go through orders/signals at all.
+
+| Check | Result |
+| --- | --- |
+| `indicator_packs` with `subject_type = 'trade_sample'` | 5416 (vs. 259 `subject_type = 'signal'`) |
+| Win/loss-eligible `trade_samples` joined via `indicator_packs.trade_sample_id = trade_samples.id` | **5404** (essentially all of them have a pack row) |
+| ...of those, with `current_pack_json` populated (`current_status = 'succeeded'`) | **383** |
+
+**Corrected conclusion**: real, computed feature data already exists for
+**383 historical_import win/loss samples**, via `indicator_packs`'s
+`trade_sample_id` relation — not zero. `entry_indicator_pack_id` on
+`trade_samples` appears unused in this dataset (always null); it is not the
+right column to join on for historical imports. TF-3's premise ("no feature
+data exists anywhere for any eligible sample") is **withdrawn** for the
+`trade_sample_id` path; the order/signal-based paths (TF-3's original
+finding) remain correctly empty for live/paper (which barely has eligible
+data anyway — 12 `partial`-quality samples, not win/loss-eligible).
+
+**Leakage risk is lower here than TF-2's original concern.** TF-2 flagged
+`IndicatorPack.currentPackJson` as reprocessable/mutable, risking post-entry
+data leaking into a live-signal's "current" pack. For `historical_import`,
+that risk doesn't transfer the same way: the pack's computation window is
+always relative to the trade's fixed historical `entry_at`, not to "now" —
+a reprocess recomputes the same point-in-time window (e.g. after a bug fix
+or methodology change), it doesn't pull in data from after the trade
+closed. Still worth confirming (not yet done) that the indicator
+computation logic actually windows strictly relative to `entry_at` and not,
+e.g., to `updated_at`/"latest available data as of reprocessing time" — but
+the a priori risk is structurally smaller than for live signals.
+
+**Revised next step**: the 383-sample population is small relative to 5404
+total eligible samples (the other 5021 are stuck `pending`/`failed_*`), but
+it's real and non-zero. This reopens whether A*'s live-scored-signal path
+(`signal_scores.request_json`, still 0 real rows) is even the right primary
+focus right now, versus using this already-available `trade_sample`-subject
+pack data for historical imports. Not decided here — flagging for the next
+decision rather than choosing unilaterally.
