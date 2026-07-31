@@ -315,3 +315,31 @@ way.
 hash-compatibility reasoning stands, but it cannot be exercised because no
 `signal_scores` row exists to test against. This isn't a rejection of the
 hypothesis, just an unmet precondition.
+
+### TF-3 reconfirmed against a larger restored backup (2026-08-01, same session)
+
+Between the checks above and this one, the target DB briefly went through a
+backup restore (schema dropped/empty, then repopulated) — confirmed
+intentional by fcsousa, not an incident. Re-ran the same aggregate checks
+against the stable, restored state (verified stable across two reads 5s
+apart): 5416 `trade_samples`, 704 `orders`, 527 `signals`, `signal_scores`
+still 0.
+
+| Check | Result (restored backup) |
+| --- | --- |
+| `trade_samples` by `(source_type, sample_quality, result_label)` | 2951 `historical_import`/`complete`/`win`, 2453 `historical_import`/`complete`/`loss`, 12 `paper_order`/`partial`/`NULL` (excluded by label-policy §2 quality rule anyway) |
+| `trade_samples.entry_indicator_pack_id IS NOT NULL` | still 0 of 5416 |
+| `trade_samples.order_id IS NOT NULL` | **12** (exactly the `paper_order`/`partial` rows — zero overlap with win/loss-eligible samples) |
+| `indicator_packs.current_status` | 4981 `pending`, **523 `succeeded`**, 87 `failed_retriable`, 84 `failed_terminal` |
+| Win/loss-eligible samples joined to a pack via TF-2's real path (`order_id → orders.signal_id → indicator_packs.signal_id`) | **0** |
+| Win/loss-eligible samples joined to `signal_scores` via the same real path | **0** |
+
+**Conclusion reinforced, not overturned, by 15x more data**: even though
+523 `indicator_packs` now have real computed `current_pack_json` (up from 2
+in the smaller snapshot), and 704 `orders` carry a real `signal_id` link,
+there is **zero intersection** between win/loss-eligible `trade_samples`
+(all 5404 of them, 100% `historical_import`) and any real feature source —
+because none of them have `order_id` set at all. The 12 samples that *do*
+have an order link are `partial` quality and excluded from training by
+`label-policy.md` §2 regardless. TF-3's blocker stands: no feature data
+exists for any currently-eligible training sample, on any path.
