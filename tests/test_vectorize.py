@@ -2,21 +2,61 @@ import json
 
 import pytest
 
-from training.vectorize import VectorizeError, load_feature_order, vectorize, vectorize_all
+from training.vectorize import (
+    FeatureOrder,
+    VectorizeError,
+    load_feature_order,
+    vectorize,
+    vectorize_all,
+)
+
+REAL_SHAPED_DICTIONARY = {
+    "required": [
+        "ema_9",
+        "rsi_14",
+        "risk_reward_ratio",
+        "trend_regime",
+        "volatility_regime",
+    ],
+    "numerical": ["ema_9", "rsi_14", "risk_reward_ratio"],
+    "categorical": ["asset", "trend_regime", "volatility_regime"],
+}
 
 
 class TestLoadFeatureOrder:
-    def test_loads_required_list_by_default(self, tmp_path):
+    def test_defaults_to_numerical_list(self, tmp_path):
         path = tmp_path / "feature_dictionary.json"
-        path.write_text(json.dumps({"required": ["rsi_14", "ema_9"], "optional": ["macd"]}))
+        path.write_text(json.dumps(REAL_SHAPED_DICTIONARY))
 
-        assert load_feature_order(path) == ("rsi_14", "ema_9")
+        loaded = load_feature_order(path)
+
+        assert loaded.names == ("ema_9", "rsi_14", "risk_reward_ratio")
+        assert loaded.source == "numerical"
+
+    def test_deferred_categoricals_are_required_minus_numerical(self, tmp_path):
+        path = tmp_path / "feature_dictionary.json"
+        path.write_text(json.dumps(REAL_SHAPED_DICTIONARY))
+
+        loaded = load_feature_order(path)
+
+        assert loaded.deferred_categoricals == ("trend_regime", "volatility_regime")
 
     def test_loads_alternate_list_when_keys_specified(self, tmp_path):
         path = tmp_path / "feature_dictionary.json"
-        path.write_text(json.dumps({"required": ["rsi_14"], "numerical": ["ema_9", "atr_14"]}))
+        path.write_text(json.dumps({"required": ["rsi_14"], "optional": ["macd", "ema_9"]}))
 
-        assert load_feature_order(path, keys="numerical") == ("ema_9", "atr_14")
+        loaded = load_feature_order(path, keys="optional")
+
+        assert loaded.names == ("macd", "ema_9")
+        assert loaded.source == "optional"
+
+    def test_required_list_has_no_deferred_categoricals_against_itself(self, tmp_path):
+        path = tmp_path / "feature_dictionary.json"
+        path.write_text(json.dumps(REAL_SHAPED_DICTIONARY))
+
+        loaded = load_feature_order(path, keys="required")
+
+        assert loaded.deferred_categoricals == ()
 
     def test_missing_keys_list_raises(self, tmp_path):
         path = tmp_path / "feature_dictionary.json"
@@ -27,23 +67,37 @@ class TestLoadFeatureOrder:
 
     def test_malformed_list_raises(self, tmp_path):
         path = tmp_path / "feature_dictionary.json"
-        path.write_text(json.dumps({"required": ["rsi_14", 42]}))
+        path.write_text(json.dumps({"numerical": ["rsi_14", 42]}))
 
         with pytest.raises(VectorizeError, match="malformed"):
             load_feature_order(path)
 
     def test_empty_list_raises(self, tmp_path):
         path = tmp_path / "feature_dictionary.json"
-        path.write_text(json.dumps({"required": []}))
+        path.write_text(json.dumps({"numerical": []}))
 
         with pytest.raises(VectorizeError, match="empty"):
             load_feature_order(path)
 
     def test_order_matches_json_order_not_sorted(self, tmp_path):
         path = tmp_path / "feature_dictionary.json"
-        path.write_text(json.dumps({"required": ["volatility_regime", "atr_14", "ema_9"]}))
+        path.write_text(json.dumps({"numerical": ["atr_14", "rsi_14", "ema_9"]}))
 
-        assert load_feature_order(path) == ("volatility_regime", "atr_14", "ema_9")
+        assert load_feature_order(path).names == ("atr_14", "rsi_14", "ema_9")
+
+    def test_missing_required_list_yields_empty_deferred_categoricals(self, tmp_path):
+        path = tmp_path / "feature_dictionary.json"
+        path.write_text(json.dumps({"numerical": ["ema_9"]}))
+
+        loaded = load_feature_order(path)
+
+        assert loaded.deferred_categoricals == ()
+
+    def test_returns_feature_order_dataclass(self, tmp_path):
+        path = tmp_path / "feature_dictionary.json"
+        path.write_text(json.dumps(REAL_SHAPED_DICTIONARY))
+
+        assert isinstance(load_feature_order(path), FeatureOrder)
 
 
 class TestVectorize:

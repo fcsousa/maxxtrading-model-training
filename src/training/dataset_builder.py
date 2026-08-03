@@ -40,6 +40,8 @@ class DatasetManifest:
     holdout_end: str
     seed: int
     feature_order: tuple[str, ...]
+    feature_order_source: str
+    deferred_categoricals: tuple[str, ...]
     train_count: int
     validation_count: int
     holdout_count: int
@@ -90,6 +92,8 @@ def build_dataset(
     label_policy_ref: str,
     seed: int,
     feature_order: Sequence[str],
+    feature_order_source: str,
+    deferred_categoricals: Sequence[str] = (),
 ) -> tuple[DatasetPartitions, DatasetManifest]:
     """Split samples into monotonic, non-overlapping partitions by entry_at.
 
@@ -100,13 +104,18 @@ def build_dataset(
     trusts label_export.py's disposition filtering but not its own caller's
     window bookkeeping.
 
-    feature_order (from training.vectorize.load_feature_order) is recorded
-    in the manifest and folded into dataset_id's hash — a dataset built
-    against a different feature order is a different dataset, even if the
-    label partitions are identical.
+    feature_order, feature_order_source and deferred_categoricals normally
+    come straight from training.vectorize.load_feature_order()'s
+    FeatureOrder (.names, .source, .deferred_categoricals) and are recorded
+    in the manifest, folded into dataset_id's hash — a dataset built against
+    a different feature order (or a different deferred-categoricals
+    decision) is a different dataset, even if the label partitions are
+    identical.
     """
     if not feature_order:
         raise DatasetBuildError("feature_order must not be empty")
+    if not feature_order_source:
+        raise DatasetBuildError("feature_order_source must not be empty")
 
     _validate_split_boundaries(
         window_start=window_start,
@@ -137,6 +146,7 @@ def build_dataset(
     holdout_checksum = _checksum(holdout)
 
     feature_order_tuple = tuple(feature_order)
+    deferred_categoricals_tuple = tuple(deferred_categoricals)
     manifest_payload = {
         "source_window_start": window_start.isoformat(),
         "source_window_end": window_end.isoformat(),
@@ -147,6 +157,8 @@ def build_dataset(
         "holdout_end": holdout_end.isoformat(),
         "seed": seed,
         "feature_order": feature_order_tuple,
+        "feature_order_source": feature_order_source,
+        "deferred_categoricals": deferred_categoricals_tuple,
         "train_checksum": train_checksum,
         "validation_checksum": validation_checksum,
         "holdout_checksum": holdout_checksum,
@@ -164,6 +176,8 @@ def build_dataset(
         holdout_end=manifest_payload["holdout_end"],
         seed=seed,
         feature_order=feature_order_tuple,
+        feature_order_source=feature_order_source,
+        deferred_categoricals=deferred_categoricals_tuple,
         train_count=len(train),
         validation_count=len(validation),
         holdout_count=len(holdout),

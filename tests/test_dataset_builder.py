@@ -41,6 +41,8 @@ def _build(samples, **overrides):
         label_policy_ref="maxxtrading-model-training@c557216",
         seed=42,
         feature_order=DEFAULT_FEATURE_ORDER,
+        feature_order_source="numerical",
+        deferred_categoricals=("trend_regime", "volatility_regime"),
     )
     params.update(overrides)
     return build_dataset(samples, **params)
@@ -138,6 +140,8 @@ class TestManifestContents:
         assert manifest.holdout_end == HOLDOUT_END.isoformat()
         assert manifest.seed == 42
         assert manifest.feature_order == DEFAULT_FEATURE_ORDER
+        assert manifest.feature_order_source == "numerical"
+        assert manifest.deferred_categoricals == ("trend_regime", "volatility_regime")
         assert manifest.train_count == 1
         assert manifest.validation_count == 0
         assert manifest.holdout_count == 0
@@ -205,8 +209,38 @@ class TestFeatureOrderIsMandatory:
         with pytest.raises(DatasetBuildError, match="feature_order"):
             _build([], feature_order=())
 
+    def test_empty_feature_order_source_raises(self):
+        with pytest.raises(DatasetBuildError, match="feature_order_source"):
+            _build([], feature_order_source="")
+
     def test_feature_order_is_recorded_as_a_tuple(self):
         _, manifest = _build([], feature_order=["ema_9", "rsi_14"])
 
         assert manifest.feature_order == ("ema_9", "rsi_14")
         assert isinstance(manifest.feature_order, tuple)
+
+    def test_deferred_categoricals_defaults_to_empty_tuple(self):
+        _, manifest = _build([], deferred_categoricals=())
+
+        assert manifest.deferred_categoricals == ()
+
+    def test_deferred_categoricals_is_recorded_as_a_tuple(self):
+        _, manifest = _build([], deferred_categoricals=["trend_regime", "volatility_regime"])
+
+        assert manifest.deferred_categoricals == ("trend_regime", "volatility_regime")
+
+    def test_different_feature_order_source_yields_different_dataset_id(self):
+        samples = [_sample("a", datetime(2026, 1, 2))]
+
+        _, manifest_1 = _build(samples, feature_order_source="numerical")
+        _, manifest_2 = _build(samples, feature_order_source="required")
+
+        assert manifest_1.dataset_id != manifest_2.dataset_id
+
+    def test_different_deferred_categoricals_yields_different_dataset_id(self):
+        samples = [_sample("a", datetime(2026, 1, 2))]
+
+        _, manifest_1 = _build(samples, deferred_categoricals=("trend_regime",))
+        _, manifest_2 = _build(samples, deferred_categoricals=())
+
+        assert manifest_1.dataset_id != manifest_2.dataset_id
