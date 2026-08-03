@@ -453,3 +453,59 @@ above. T6b feature-export SQL may now be written **for this path only**
 (join via `indicator_packs.trade_sample_id`, `current_status = 'succeeded'`,
 `current_pack_json`) — still no SQL against `signal_scores`/live-signal
 paths, which remain gated on that table having real rows.
+
+## Finding TF-4 (open, 2026-08-01) — feature-vocabulary mismatch, not a coverage gap
+
+**Phase 1 smoke export executed** under explicit AUTH (export-only, RO
+credential `scoreengine_readonly` on `192.168.3.10:5432/maxxtrading`,
+window `2025-07-29..2026-07-02`, N=100, no writes). T6b → T6 → vectorize →
+T7 pipeline run against 100 real succeeded `trade_sample`-subject packs.
+**Stopped at the vectorize step, exactly per AUTH's "stop if errors"** — no
+`dataset_id`/manifest produced, no training attempted.
+
+Per-feature coverage across the 100-sample batch (canonical order =
+Feature Dictionary `"numerical"` list, Phase 1 default):
+
+| Feature | Coverage |
+| --- | --- |
+| `ema_9`, `ema_40`, `ema_80`, `rsi_14`, `atr_14` | **100/100 (100%)** |
+| `risk_reward_ratio`, `volume_ratio`, `distance_price_ema9_pct`, `distance_price_ema40_pct`, `ema40_above_ema80`, `hour_of_day`, `day_of_week` | **0/100 (0%)** |
+
+0 of 100 samples had all 12 required numerical features. This is not
+sparse/missing data on a few samples — it is a **consistent, 100%-across-
+the-batch split**: exactly 5 of 12 canonical fields are always present,
+the other 7 are always absent.
+
+Real packs also compute a rich set of indicators **not in the Score
+Engine's Feature Dictionary at all** (100/100 each): `ema_20`, `ema_200`,
+`sma_20`, `sma_50`, `adx_14`, `natr_14`, `bollinger_bands_20_2`,
+`stddev_20`, `rsi_2`, `slow_stochastic_14_3_3`, `macd_12_26_9`,
+`williams_r_14`, `mfi_14`, `volume_sma_20`, `obv`, and more.
+
+**Conclusion**: this is not a data-quality/backfill-coverage problem (like
+TF-3's `pending` packs). It is a **feature-vocabulary divergence** —
+NestJS's indicator-pack computation and the Score Engine's
+`feature_dictionary_v1.json` were built independently and were never
+reconciled against each other. The two systems currently speak different
+feature languages; only 5 names happen to coincide.
+
+**Not decided here (needs a product/ML decision, not a code fix)**:
+
+- (a) Redefine `feature_order` to the 5 fields that are actually 100%
+  covered (`ema_9`, `ema_40`, `ema_80`, `rsi_14`, `atr_14`) — smallest,
+  immediately viable vector, but drops `risk_reward_ratio` (a feature
+  AD-005/AD-006 in the Score Engine treat as significant) and ignores the
+  15+ real indicators NestJS already computes.
+- (b) Update the Score Engine's Feature Dictionary to match what NestJS
+  actually computes — **out of scope for this phase** per explicit
+  instruction (`app/artifacts/feature_dictionary_v1.json` not to be
+  touched this phase) and is a Score Engine-side change requiring its own
+  sign-off/versioning (MLF-09-adjacent, likely a Phase 2 concern).
+  Not attempted, not proposed as a diff.
+- (c) Some subset/mapping between the two vocabularies (e.g. NestJS's
+  `natr_14` as a substitute for a volatility-adjacent required field) —
+  would need domain judgment, not something to infer from field names.
+
+**Owner**: fcsousa. **Blocks**: T7-with-real-vectors / T8 real dual-run
+until a feature_order decision is made for this vocabulary. No further
+DB queries attempted after this diagnostic; standing down per AUTH.
