@@ -390,3 +390,66 @@ it's real and non-zero. This reopens whether A*'s live-scored-signal path
 focus right now, versus using this already-available `trade_sample`-subject
 pack data for historical imports. Not decided here — flagging for the next
 decision rather than choosing unilaterally.
+
+### Decision (2026-08-01, fcsousa): prioritize the 383-sample path, conditional A\*
+
+1. Prioritize the `indicator_packs.trade_sample_id` path (383 real samples)
+   for A* now. Treat it as **conditional A\* (parity = anchor_policy)**, not
+   an online hash proof — i.e. parity is established by proving the pack's
+   computation is correctly anchored to `entry_at` with no post-entry
+   leakage, not by matching a `featuresHash` (there is nothing to match
+   against for historical imports; no `signal_scores` row exists for them).
+2. `signal_scores.request_json` + `featuresHash` remains the **future hard
+   gate** for live/paper-scored signals once `signal_scores` has real rows
+   — not a blocker for Phase 1 today, since that table is empty.
+3. Windowing must be verified in code (and empirically if possible) before
+   relying on the 383-sample path: candle/feature computation must be
+   strictly as-of `entry_at`, not "now," and reprocessing must not be able
+   to introduce post-entry data into the stored snapshot.
+
+### Windowing verification (2026-08-01) — PASS at code level
+
+Source: `fcsousa/maxxtrading` read-only clone, same commit family as
+`65ebecd`. Three independent pieces of evidence, all pointing the same way:
+
+1. **`src/modules/indicator-packs/subjects/indicator-pack-subject.resolver.ts::resolveTradeSample`**
+   sets `anchorTime: sample.entryAt` — the anchor for a `trade_sample`-subject
+   pack is the sample's real historical entry time, never "now" or the
+   reprocessing timestamp. Re-running this resolver (on retry/reprocess)
+   re-derives the same `entryAt`-based anchor every time, since it re-reads
+   `sample.entryAt` from the DB, not from run-local state.
+2. **`src/modules/indicator-packs/subjects/validate-anchor-candles.util.ts`**
+   (`validateAnchorCandles`, called from
+   `indicator-pack-schema2-calculation.service.ts` right after
+   `historicalMarketData.fetchClosedCandles(..., anchorTime, ...)`): any
+   candle with `closeTime > anchorTime` fails the **entire** pack
+   computation with `FUTURE_CANDLE_REJECTED` — not a silent truncation, a
+   hard failure. This guard runs unconditionally, on every computation
+   (initial, retry, `reprocess_single`, `reprocess_batch`, `sweeper`) —
+   there is no code path that skips it.
+3. **`src/modules/indicator-packs/schemas/indicator-pack-schema-v2.schema.ts`**:
+   the persisted pack JSON schema itself requires
+   `leakageCheckStatus: z.literal('passed')` — a pack cannot even validate
+   as schema-2 (and therefore cannot be stored in `current_pack_json`)
+   without this field being exactly `'passed'`. `metadata.anchorTime` is
+   also part of the persisted schema, so the anchor used is recorded
+   alongside the pack, not just implied.
+
+**Empirical spot-check: attempted, not completed.** Planned to compare a
+real succeeded pack's `current_pack_json -> metadata ->> 'anchorTime'` and
+`-> timeframes -> primary -> candles ->> 'lastCandleCloseTime'` against its
+`trade_samples.entry_at`, for one of the 383 real rows. The DB connection
+timed out on three attempts (same host churn as the earlier backup-restore
+session) — not completed yet. Given the specificity of the three code
+findings above (a named `FUTURE_CANDLE_REJECTED` guard plus a schema-level
+required `leakageCheckStatus` field), this is recorded as **PASS at code
+level, high confidence**; the empirical spot-check remains a nice-to-have
+follow-up, not a blocker, and can be run opportunistically once the DB is
+reachable again.
+
+**A\* status**: **conditional PASS** for the historical_import /
+`trade_sample`-subject-pack path (383 real samples), per the decision
+above. T6b feature-export SQL may now be written **for this path only**
+(join via `indicator_packs.trade_sample_id`, `current_status = 'succeeded'`,
+`current_pack_json`) — still no SQL against `signal_scores`/live-signal
+paths, which remain gated on that table having real rows.
