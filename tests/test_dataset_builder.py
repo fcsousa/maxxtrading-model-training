@@ -27,6 +27,9 @@ def _sample(sample_id: str, entry_at: datetime, label: int = 1) -> LabeledTradeS
     )
 
 
+DEFAULT_FEATURE_ORDER = ("ema_9", "rsi_14")
+
+
 def _build(samples, **overrides):
     params = dict(
         window_start=WINDOW_START,
@@ -37,6 +40,7 @@ def _build(samples, **overrides):
         holdout_end=HOLDOUT_END,
         label_policy_ref="maxxtrading-model-training@c557216",
         seed=42,
+        feature_order=DEFAULT_FEATURE_ORDER,
     )
     params.update(overrides)
     return build_dataset(samples, **params)
@@ -133,6 +137,7 @@ class TestManifestContents:
         assert manifest.validation_end == VALIDATION_END.isoformat()
         assert manifest.holdout_end == HOLDOUT_END.isoformat()
         assert manifest.seed == 42
+        assert manifest.feature_order == DEFAULT_FEATURE_ORDER
         assert manifest.train_count == 1
         assert manifest.validation_count == 0
         assert manifest.holdout_count == 0
@@ -185,3 +190,23 @@ class TestDeterminism:
         _, manifest_reversed = _build(list(reversed(samples)))
 
         assert manifest_forward.dataset_id == manifest_reversed.dataset_id
+
+    def test_different_feature_order_yields_different_dataset_id(self):
+        samples = [_sample("a", datetime(2026, 1, 2))]
+
+        _, manifest_1 = _build(samples, feature_order=("ema_9", "rsi_14"))
+        _, manifest_2 = _build(samples, feature_order=("rsi_14", "ema_9"))
+
+        assert manifest_1.dataset_id != manifest_2.dataset_id
+
+
+class TestFeatureOrderIsMandatory:
+    def test_empty_feature_order_raises(self):
+        with pytest.raises(DatasetBuildError, match="feature_order"):
+            _build([], feature_order=())
+
+    def test_feature_order_is_recorded_as_a_tuple(self):
+        _, manifest = _build([], feature_order=["ema_9", "rsi_14"])
+
+        assert manifest.feature_order == ("ema_9", "rsi_14")
+        assert isinstance(manifest.feature_order, tuple)
