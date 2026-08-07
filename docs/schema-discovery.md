@@ -509,3 +509,35 @@ feature languages; only 5 names happen to coincide.
 **Owner**: fcsousa. **Blocks**: T7-with-real-vectors / T8 real dual-run
 until a feature_order decision is made for this vocabulary. No further
 DB queries attempted after this diagnostic; standing down per AUTH.
+
+### Resolution path (2026-08-01, fcsousa) — supersedes options a/b/c above
+
+Neither (a) shrink to 5 fields, (b) edit the Score Engine's Feature
+Dictionary, nor (c) an inferred name-mapping. Instead:
+
+1. A cross-repo semantic contract already exists and is adopted on the
+   Score Engine side: `maxxtrading-scoreengine/docs/analisys/feature_semantics_se_fd_v1.md`
+   (commit `a1e316f`) — `FEATURES_CONTRACT_VERSION = se-fd-v1`, defining
+   canonical `trend_regime`/`volatility_regime` string alphabets and the
+   exact `volume_ratio` formula (last closed primary candle's volume ÷
+   `volume_sma_20`, fail-closed/omitted if the divisor is missing or zero
+   — matches this repo's own fail-closed philosophy). TF-4's resolution is
+   for NestJS to **promote its own pack computation** to emit fields
+   matching this contract, not for either repo to bend to the other's
+   current output.
+2. Once "Nest bridge + SE Q1/Q2 done" (NestJS promotes
+   `FEATURES_CONTRACT_VERSION` to `se-fd-v1`) and packs are regenerated
+   under that contract, re-run the Phase 1 smoke export against those new
+   packs. **Old packs computed before the bridge will still fail-closed at
+   vectorize — expected, not a regression**, since they were never
+   contracted to emit the required fields.
+3. Before the next export AUTH: fix `TRAINING_DATABASE_URL` to an RO role
+   on `db=maxxtrading` (currently the `postgres` superuser — flagged this
+   session, not yet corrected) and target packs produced after the bridge
+   (or an explicit Nest backfill of old ones).
+4. Next AUTH will re-run Passo 1 (export-only) with
+   `feature_order=numerical` (the full 12, not a shrunk 5), plus whatever
+   categoricals policy is documented at that point. Dual-run AUTH stays a
+   separate, later authorization after a green manifest/`dataset_id`.
+
+No DB/training action taken or planned until that AUTH block arrives.
