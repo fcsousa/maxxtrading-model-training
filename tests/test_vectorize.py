@@ -8,6 +8,7 @@ from training.vectorize import (
     load_feature_order,
     vectorize,
     vectorize_all,
+    vectorize_all_soft,
 )
 
 REAL_SHAPED_DICTIONARY = {
@@ -142,3 +143,25 @@ class TestVectorizeAll:
 
         with pytest.raises(VectorizeError, match="sample 's1'"):
             vectorize_all(features_by_sample_id, ["ema_9", "rsi_14"])
+
+
+class TestVectorizeAllSoft:
+    def test_reports_coverage_and_keeps_full_vectors_only(self):
+        features_by_sample_id = {
+            "full": {"ema_9": 1.0, "rsi_14": 50.0},
+            "partial": {"ema_9": 2.0},
+            "empty": {},
+        }
+
+        coverage = vectorize_all_soft(features_by_sample_id, ["ema_9", "rsi_14"])
+
+        assert coverage.eligible == 3
+        assert coverage.vectorized == 1
+        assert coverage.partial == 1
+        assert coverage.skipped == 2
+        assert coverage.vectors == {"full": [1.0, 50.0]}
+        assert coverage.missing_counts == {"ema_9": 1, "rsi_14": 2}
+
+    def test_empty_feature_order_raises(self):
+        with pytest.raises(VectorizeError, match="empty"):
+            vectorize_all_soft({"s1": {"ema_9": 1.0}}, [])

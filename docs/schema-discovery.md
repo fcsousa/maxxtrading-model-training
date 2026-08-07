@@ -541,3 +541,49 @@ Dictionary, nor (c) an inferred name-mapping. Instead:
    separate, later authorization after a green manifest/`dataset_id`.
 
 No DB/training action taken or planned until that AUTH block arrives.
+
+### Re-run Passo 1 (2026-08-07) — after Nest se-fd-v1 + SE Q1/Q2/Q3 AUTH
+
+AUTH export-only re-run executed on branch `feature/mlflow-p1-data-foundation`
+against `192.168.3.10:5432` / db=`maxxtrading` / user=`scoreengine_readonly`
+(`TRAINING_DATABASE_URL` RO — matches `SCOREENGINE_READONLY_DATABASE_URL`).
+Window `2025-07-29..2026-07-02`, N=100. SELECT-only; write probe rejected.
+
+**Pipeline changes in this re-run (code):**
+
+- T6b reads immutable `indicator_pack_runs.pack_json` (run-pin / DISTINCT ON
+  latest succeeded run per sample) — not mutable
+  `indicator_packs.current_pack_json` / `last_successful_pack_json`.
+- Bridge enrichment: `hour_of_day` / `day_of_week` from `metadata.anchorTime`
+  (UTC, Nest `getUTCDay` semantics); `risk_reward_ratio` derived from
+  `historical_trades` entry/stop/target when absent from pack flatten.
+- Soft vectorize (`vectorize_all_soft`) reports coverage; does **not** shrink
+  `feature_order` from numerical-12. Manifest only when ≥1 full vector.
+
+**Live coverage (N=100 batch, feature_order=numerical 12):**
+
+| Metric | Value |
+| --- | --- |
+| labels_eligible (window) | 4933 |
+| packs_succeeded (run-pinned, window) | 383 |
+| batch_size | 100 |
+| vectorized (full 12) | **0** |
+| partial | 100 |
+| skipped | 100 |
+
+| Feature | Present after B2+RRR enrich |
+| --- | --- |
+| `ema_9`, `ema_40`, `ema_80`, `rsi_14`, `atr_14` | 100/100 |
+| `risk_reward_ratio` (HT-derived) | 100/100 |
+| `hour_of_day`, `day_of_week` (B2) | 100/100 |
+| `volume_ratio`, `distance_price_ema9_pct`, `distance_price_ema40_pct`, `ema40_above_ema80` | **0/100** |
+
+DB-wide probe: **0** succeeded trade_sample runs mention `volume_ratio` /
+`distance_price_ema9_pct` / `ema40_above_ema80`; **0** runs with
+`finished_at >= 2026-07-14`. Packs in this DB are still pre-ponte schema
+(fd versions 2–3, no `globalFeatures`). Nest `se-fd-v1` promotion is live
+in code, but **no regenerated/backfilled packs** are visible here yet.
+
+**Result:** STOP — no `dataset_id` / DatasetManifest. Fail-closed correct.
+Dual-run AUTH remains blocked until Nest emits contracted packs (or
+backfills) into `maxxtrading`.

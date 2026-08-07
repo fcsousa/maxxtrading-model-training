@@ -112,3 +112,67 @@ def vectorize_all(
         except VectorizeError as exc:
             raise VectorizeError(f"sample '{sample_id}': {exc}") from exc
     return result
+
+
+@dataclass(frozen=True)
+class VectorizeCoverage:
+    """Coverage stats for a soft (skip-incomplete) vectorize pass.
+
+    eligible: samples offered to vectorize
+    vectorized: samples with the full feature_order present
+    partial: samples with at least one but not all feature_order keys
+    skipped: samples with zero feature_order keys present (or any miss when
+        counting fail-closed skips -- equals eligible - vectorized)
+    missing_counts: per-feature how many eligible samples lacked that key
+    vectors: sample_id -> ordered float vector for vectorized samples only
+    """
+
+    eligible: int
+    vectorized: int
+    partial: int
+    skipped: int
+    missing_counts: dict[str, int]
+    vectors: dict[str, list[float]]
+
+
+def vectorize_all_soft(
+    features_by_sample_id: Mapping[str, Mapping[str, float]],
+    feature_order: Sequence[str],
+) -> VectorizeCoverage:
+    """Vectorize samples that have the full feature_order; skip the rest.
+
+    Fail-closed per sample (no imputation), but does not abort the batch on
+    the first miss -- Phase 1 smoke needs coverage stats over mixed
+    pre-/post-ponte packs.
+    """
+    if not feature_order:
+        raise VectorizeError("feature_order must not be empty")
+
+    missing_counts = {name: 0 for name in feature_order}
+    vectors: dict[str, list[float]] = {}
+    partial = 0
+    zero = 0
+
+    for sample_id, features in features_by_sample_id.items():
+        present = [name for name in feature_order if name in features]
+        missing = [name for name in feature_order if name not in features]
+        for name in missing:
+            missing_counts[name] += 1
+        if not missing:
+            vectors[sample_id] = [features[name] for name in feature_order]
+        elif not present:
+            zero += 1
+        else:
+            partial += 1
+
+    eligible = len(features_by_sample_id)
+    vectorized = len(vectors)
+    skipped = eligible - vectorized
+    return VectorizeCoverage(
+        eligible=eligible,
+        vectorized=vectorized,
+        partial=partial,
+        skipped=skipped,
+        missing_counts=missing_counts,
+        vectors=vectors,
+    )
