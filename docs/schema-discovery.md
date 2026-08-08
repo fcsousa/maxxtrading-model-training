@@ -611,3 +611,12 @@ bug). Fix included: naive Postgres timestamps compare safely against
 UTC-aware window bounds in `build_dataset`.
 
 **Result:** PASS Passo 1. Dual-run (T8) still needs separate AUTH.
+
+### T8 dual-run Passo 2 (2026-08-08) — AUTH
+
+Reconstituted Passo 1 params → **same** `dataset_id`. Two `train(...)`
+calls with `seed=42`, `model_params={}`, tolerance `1e-9`.
+`runs_are_reproducible` → **True**. Full sanitized record:
+[`docs/t8-dual-run-evidence.md`](t8-dual-run-evidence.md).
+
+**Result:** PASS T8 dual-run (model-training). Handoff next: Score Engine T9.
