@@ -12,13 +12,20 @@ import hashlib
 import json
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 
 from training.label_export import LabeledTradeSample
 
 
 class DatasetBuildError(Exception):
     """Raised when the split configuration or input samples are invalid."""
+
+
+def _ensure_utc(value: datetime) -> datetime:
+    """Normalize naive DB timestamps as UTC so they compare with aware bounds."""
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
 
 
 @dataclass(frozen=True)
@@ -117,26 +124,34 @@ def build_dataset(
     if not feature_order_source:
         raise DatasetBuildError("feature_order_source must not be empty")
 
+    window_start_utc = _ensure_utc(window_start)
+    window_end_utc = _ensure_utc(window_end)
+    as_of_utc = _ensure_utc(as_of)
+    train_end_utc = _ensure_utc(train_end)
+    validation_end_utc = _ensure_utc(validation_end)
+    holdout_end_utc = _ensure_utc(holdout_end)
+
     _validate_split_boundaries(
-        window_start=window_start,
-        window_end=window_end,
-        as_of=as_of,
-        train_end=train_end,
-        validation_end=validation_end,
-        holdout_end=holdout_end,
+        window_start=window_start_utc,
+        window_end=window_end_utc,
+        as_of=as_of_utc,
+        train_end=train_end_utc,
+        validation_end=validation_end_utc,
+        holdout_end=holdout_end_utc,
     )
 
-    ordered = sorted(samples, key=lambda sample: (sample.entry_at, sample.id))
+    ordered = sorted(samples, key=lambda sample: (_ensure_utc(sample.entry_at), sample.id))
     train: list[LabeledTradeSample] = []
     validation: list[LabeledTradeSample] = []
     holdout: list[LabeledTradeSample] = []
 
     for sample in ordered:
-        if sample.entry_at < window_start or sample.entry_at >= holdout_end:
+        entry_at = _ensure_utc(sample.entry_at)
+        if entry_at < window_start_utc or entry_at >= holdout_end_utc:
             raise DatasetBuildError(f"sample '{sample.id}' entry_at is outside the dataset window")
-        if sample.entry_at < train_end:
+        if entry_at < train_end_utc:
             train.append(sample)
-        elif sample.entry_at < validation_end:
+        elif entry_at < validation_end_utc:
             validation.append(sample)
         else:
             holdout.append(sample)

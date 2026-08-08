@@ -587,3 +587,27 @@ in code, but **no regenerated/backfilled packs** are visible here yet.
 **Result:** STOP — no `dataset_id` / DatasetManifest. Fail-closed correct.
 Dual-run AUTH remains blocked until Nest emits contracted packs (or
 backfills) into `maxxtrading`.
+
+### Re-run Passo 1 (2026-08-08) — after Nest pack backfill
+
+DB now has regenerated trade_sample packs (`globalFeatures`, contracted
+B1 fields). Same AUTH window `2025-07-29..2026-07-02`, N=100, RO
+`scoreengine_readonly` @ `maxxtrading`. SELECT-only; write probe rejected.
+
+| Metric | Value |
+| --- | --- |
+| labels_eligible | 4997 |
+| packs_succeeded (run-pinned) | 4582 |
+| batch_size | 100 |
+| vectorized (full numerical-12) | **100** |
+| partial / skipped | 0 / 0 |
+| `dataset_id` | `e70956f6722d8a106d8484ebfb9483c44c85d6ede39a6bbc7837373daf02f058` |
+| idempotent re-run | **same** `dataset_id` |
+
+Manifest: `feature_order_source=numerical`, deferred
+`trend_regime`/`volatility_regime`, train_count=100 (validation/holdout 0
+on this N=100 earliest-full batch — expected for smoke cap, not a split
+bug). Fix included: naive Postgres timestamps compare safely against
+UTC-aware window bounds in `build_dataset`.
+
+**Result:** PASS Passo 1. Dual-run (T8) still needs separate AUTH.

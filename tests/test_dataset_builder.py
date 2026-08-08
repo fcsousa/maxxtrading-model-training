@@ -244,3 +244,32 @@ class TestFeatureOrderIsMandatory:
         _, manifest_2 = _build(samples, deferred_categoricals=())
 
         assert manifest_1.dataset_id != manifest_2.dataset_id
+
+
+class TestNaiveDbTimestampsCompareAgainstAwareBounds:
+    def test_naive_entry_at_splits_against_utc_aware_bounds(self):
+        from datetime import UTC
+
+        samples = [
+            _sample("train", datetime(2026, 1, 2)),  # naive, as Postgres often returns
+            _sample("val", datetime(2026, 1, 10)),
+            _sample("hold", datetime(2026, 1, 18)),
+        ]
+        partitions, manifest = build_dataset(
+            samples,
+            window_start=datetime(2026, 1, 1, tzinfo=UTC),
+            window_end=datetime(2026, 1, 22, tzinfo=UTC),
+            as_of=datetime(2026, 1, 25, tzinfo=UTC),
+            train_end=datetime(2026, 1, 8, tzinfo=UTC),
+            validation_end=datetime(2026, 1, 15, tzinfo=UTC),
+            holdout_end=datetime(2026, 1, 22, tzinfo=UTC),
+            label_policy_ref="docs/label-policy.md",
+            seed=42,
+            feature_order=DEFAULT_FEATURE_ORDER,
+            feature_order_source="numerical",
+        )
+
+        assert [s.id for s in partitions.train] == ["train"]
+        assert [s.id for s in partitions.validation] == ["val"]
+        assert [s.id for s in partitions.holdout] == ["hold"]
+        assert manifest.dataset_id
