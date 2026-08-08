@@ -52,6 +52,13 @@ Nenhum comando acima deve ser executado contra um Postgres de produção ou
 contra o `DATABASE_URL` do Score Engine. Acesso a dados reais exige uma
 credencial somente-leitura dedicada e autorização explícita por sessão.
 
+## Política para agentes (multi-repo)
+
+Antes de editar, leia [`docs/agent-repo-policy.md`](docs/agent-repo-policy.md):
+quando usar este repo vs o Score Engine, mapa task→branch, claim/release e
+handoff. Documento canônico completo:
+`maxxtrading-scoreengine/docs/mlflow/agent-repo-policy.md`.
+
 ## Contexto do roadmap
 
 Este repositório é a metade externa do plano de adoção do MLflow descrito em

@@ -21,6 +21,9 @@ Pipeline externo de dados/treino do `maxxtrading-scoreengine` (AD-013). Ver
 
 ## Referências
 
+- Política multi-repo (quando usar este repo vs Score Engine, claim/handoff):
+  `docs/agent-repo-policy.md` (espelho); canônico em
+  `maxxtrading-scoreengine/docs/mlflow/agent-repo-policy.md`.
 - Repositório irmão: `maxxtrading-scoreengine`
   (`.specs/features/mlflow-adoption-roadmap/` para spec/design/tasks).
 - Contrato de leitura: `docs/trading_read_contract.md` naquele repositório.
