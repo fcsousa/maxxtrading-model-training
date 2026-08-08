@@ -76,6 +76,9 @@ class TestAssembleSmoke:
 
         assert report.dataset_id is not None
         assert report.manifest is not None
+        assert report.partitions is not None
+        assert len(report.partitions.train) == 1
+        assert "full" in report.coverage.vectors
         assert report.coverage.vectorized == 1
         assert report.manifest.feature_order_source == "numerical"
         assert report.manifest.deferred_categoricals == ("trend_regime",)

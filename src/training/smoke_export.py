@@ -43,6 +43,10 @@ class ExportSmokeReport:
     dataset_id: str | None
     manifest: DatasetManifest | None
     stop_reason: str | None
+    # Attached when dataset_id is green so T8 dual-run can train without
+    # re-deriving partitions. Omitted from to_sanitized_dict (vectors live
+    # on coverage.vectors; neither belongs in sanitized evidence dumps).
+    partitions: DatasetPartitions | None = None
 
     def to_sanitized_dict(self) -> dict[str, Any]:
         payload = {
@@ -194,7 +198,6 @@ def _assemble_smoke(
             deferred_categoricals=feature_order.deferred_categoricals,
         )
         dataset_id = manifest.dataset_id
-        _ = partitions  # partitions available to callers via rebuild if needed
 
     return ExportSmokeReport(
         window_start=window_start.isoformat(),
@@ -211,4 +214,5 @@ def _assemble_smoke(
         dataset_id=dataset_id,
         manifest=manifest,
         stop_reason=stop_reason,
+        partitions=partitions,
     )
