@@ -39,10 +39,26 @@ Guards verified by unit tests:
 none — no DSN, token, tracking URI with credentials, or host SSH material in
 this evidence.
 
+## AUTH attempt (2026-08-11)
+
+Operator authorized real registry work in-session. Sanitized preflight:
+
+| Check | Result |
+| --- | --- |
+| Explicit AUTH | yes |
+| `MLFLOW_TRACKING_URI` in agent environment | **unset** |
+| SSH keys to VPS on agent host | **absent** |
+| OF-4 path (register from VPS `http://mlflow:5000` on `backend`) | **not available** from this agent |
+
+No `register_model` / alias mutation was executed against any live MLflow.
+Heavy/real registration remains blocked on VPS operator access (OF-4), not on
+missing policy AUTH.
+
 ## Next AUTH (operator)
 
-When authorized, run registration **from the VPS** against the real registry
-(not from the training laptop), then append a sanitized section here with:
+When the VPS path is available, run registration **from the VPS** against the
+real registry (not from the training laptop / this agent), then append a
+sanitized section here with:
 
 - registered `version` (immutable)
 - alias targets before/after for `candidate` and `staging`

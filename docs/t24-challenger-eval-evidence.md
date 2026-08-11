@@ -73,3 +73,19 @@ dedicada) permanece **pendente** até autorização explícita de recurso.
 - Probe against production `baseline_v1` / `baseline_heuristic` on the serving image
 - MLflow registry registration (T25; requires separate auth)
 - Score Engine T26 shadow orchestrator outputs for true B1/G1 population metrics
+
+## AUTH attempt (2026-08-11)
+
+Operator authorized real training in-session. Sanitized preflight:
+
+| Check | Result |
+| --- | --- |
+| `TRAINING_DATABASE_URL` present | yes |
+| User contains `readonly` | yes (`scoreengine_readonly`) |
+| DB name | `maxxtrading` (Nest training DB) |
+| Distinct from Score Engine `DATABASE_URL` | yes (`maxxtrading-scoreengine` unused) |
+| TCP connect `192.168.3.10:5432` from agent host | **FAIL** — server closed connection / unreachable from this environment |
+
+No SELECT of trading rows was executed. No write attempted beyond the failed
+connect. Heavy/real holdout run remains blocked on network path to the RO host
+(typically LAN/VPN from the training machine), not on missing AUTH.
