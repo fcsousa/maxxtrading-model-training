@@ -8,9 +8,11 @@
 
 ## Handoff
 
-**Última atualização:** 2026-08-12 — Design+Tasks `challenger-quality-v1` prontos
+**Última atualização:** 2026-08-12 — Execute CQ-v1 Batches A+B + Verifier PASS
 
-- Spec Confirmed; Design Approved; Tasks Approved for Execute
-- Próximo: Execute Batch A (T1–T5) — oferecer subagent se usuário aceitar
-- T9 (Heavy/real) exige AUTH explícito separado
+- T1–T8 done; validation PASS (sensor 0 survived after fix `a165dbc`)
+- T9 Heavy/real **pending AUTH**
+- Branch local commits pushed to `feature/mlflow-p4-challenger-shadow` (if push succeeded)
+- SE pointer: `docs/mlflow/challenger-quality-v1-pointer.md` @ `fcc9e6a`
+- Próximo: `AUTH T9` para Heavy/real quality_export re-run
 
