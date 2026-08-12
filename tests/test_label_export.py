@@ -203,6 +203,14 @@ class TestToRowsHappyPath:
 
         assert rows[0].result_r == 1.5
 
+    def test_result_r_decimal_from_postgres_coerces_to_float(self):
+        from decimal import Decimal
+
+        rows = list(_to_rows(iter([_row(result_r=Decimal("1.25"))])))
+
+        assert rows[0].result_r == 1.25
+        assert isinstance(rows[0].result_r, float)
+
     def test_result_r_null_stays_none_without_imputation(self):
         rows = list(_to_rows(iter([_row(result_r=None)])))
 

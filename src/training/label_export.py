@@ -13,6 +13,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import datetime
+from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import text
@@ -157,7 +158,8 @@ def _to_rows(result: Iterator[Any]) -> Iterator[LabeledTradeSample]:
             )
 
         result_r: Any = getattr(row, "result_r", None)
-        if result_r is not None and not isinstance(result_r, (int, float)):
+        # Postgres NUMERIC arrives as Decimal via psycopg; coerce to float, never impute.
+        if result_r is not None and not isinstance(result_r, (int, float, Decimal)):
             raise LabelExportError(
                 f"trade_samples row column 'result_r' has unexpected type {type(result_r).__name__}"
             )
