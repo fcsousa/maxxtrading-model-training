@@ -208,3 +208,138 @@ uv run python  # peer LGBM seed=0; evaluate_challenger(... B1/G1=None)
 ```
 
 Secrets, full DSNs, and passwords were never printed.
+
+---
+
+## CQ-v1 Heavy/real (AUTH T9, 2026-08-12)
+
+**AUTH**: user explicitly authorized Heavy/real T9 with subagent; `TRAINING_DATABASE_URL`
+RO only (never Score Engine `DATABASE_URL`); no MLflow registry writes; no invented PASS.
+**Entrypoint**: `run_quality_export` + `evaluate_challenger_quality` (full Q1–M1, offline B1/G1).
+**Verdict**: **FAIL** — quotas filled; holdout ≥ 200; Q1–Q3 failed quality thresholds;
+B1/G1/L1/M1 passed. Bundle export skipped. Not a fabricated PASS.
+
+Synthetic PASS and prior T8 smoke Heavy/real FAIL sections above remain for audit history.
+
+### Preflight (sanitized)
+
+| Check | Result |
+| --- | --- |
+| Source URL | `TRAINING_DATABASE_URL` only |
+| Score Engine `DATABASE_URL` | **not used** |
+| Username contains `readonly` | yes |
+| DB name | `maxxtrading` |
+| URL ≠ `DATABASE_URL` | yes |
+| Dialect | `postgresql+psycopg` (scheme rewrite from `postgresql://`) |
+| `SELECT 1` | OK (`1`) |
+| Write probe `CREATE TEMP TABLE` | **REJECTED** — `psycopg.errors.ReadOnlySqlTransaction` / SQLAlchemy `InternalError` |
+
+### Enabling fix (session)
+
+Postgres `NUMERIC` `result_r` arrives as `Decimal` via psycopg. `label_export` now
+coerces `Decimal|int|float` → `float` (null stays `None`, no imputation) so CQ-09
+offline B1 can run against real rows.
+
+### Quality export inputs (attempt 1 — quotas filled; no alternate needed)
+
+| Param | Value |
+| --- | --- |
+| `window_start` | `2025-07-29T00:00:00+00:00` |
+| `window_end` / `as_of` / `holdout_end` | `2026-07-02T00:00:00+00:00` |
+| `train_end` | `2026-01-15T00:00:00+00:00` (later than T8 `2025-11-01`) |
+| `validation_end` | `2026-04-01T00:00:00+00:00` |
+| Quotas | `train_min=800`, `validation_min=200`, `holdout_min=200`, `n_max=5000` |
+| `include_categoricals` | `True` (`trend_regime`, `volatility_regime`) |
+| `seed` | `42` |
+| `label_policy_ref` | `docs/label-policy.md` |
+| FD | `/workspace/app/artifacts/feature_dictionary_v1.json` (read-only) |
+| Thresholds | `/workspace/app/artifacts/thresholds.json` (read-only) |
+
+### Coverage / partitions
+
+| Item | Value |
+| --- | --- |
+| `labels_eligible` | 4997 |
+| `packs_succeeded` | 4582 |
+| `batch_size` / vectorized | 4551 / 4551 (partial 0, skipped 0) |
+| `feature_dim` | 18 (12 numerical + encoded cats) |
+| `dataset_id` | `95764ac113dd7158193792aabb31c094b4a305247059cb90a8f42cc0049e11de` |
+| train / validation / holdout | 890 / 1361 / 2300 |
+| train win/loss | 502 / 388 |
+| holdout win/loss | 1248 / 1052 |
+| holdout `result_r` non-null | 2300 |
+
+### Challenger eval config
+
+| Input | Value |
+| --- | --- |
+| Path | `evaluate_challenger_quality` |
+| `ChallengerConfig.seed` | `42` |
+| algorithm / params | LightGBM V1 defaults (`challenger_config.py`) |
+| `baseline_predict` | peer LightGBM same defaults, `seed=0` (L1 fairness) |
+| `thresholds_path` | SE `thresholds.json` RO |
+| `result_r_by_sample_id` | from holdout labels |
+| `grade_confidence` | `0.8` |
+| `risk_reward_ratio` | `2.0` |
+
+### Observed metrics (signed holdout)
+
+| Metric | Observed |
+| --- | --- |
+| `auc_roc` | `0.4932812652334991` |
+| `brier_score` | `0.26717657302828496` |
+| `ece` | `0.10750721869139082` |
+| `holdout_n` | `2300` |
+| `mean_result_r_at_grade_A_delta` (B1) | `0.0` |
+| `max_abs_grade_share_delta_pp` (G1) | `0.0` |
+| `p95_latency_ratio_vs_baseline` | `0.9945174516879862` (probe N=2300) |
+| `rss_delta_mib` | `0.0` |
+| baseline / challenger p95 ms | `1.0967615504341661` / `1.0907485022471517` |
+
+### Gate results (`shadow-acceptance-v1`)
+
+| ID | Verdict | Observed | Threshold |
+| --- | --- | --- | --- |
+| Q1 | FAIL | `0.4932812652334991` | auc_roc ≥ 0.55 |
+| Q2 | FAIL | `0.26717657302828496` | brier_score ≤ 0.25 |
+| Q3 | FAIL | `0.10750721869139082` | ece ≤ 0.10 |
+| B1 | PASS | `0.0` | mean_result_r_at_grade_A_delta ≥ 0.0 |
+| G1 | PASS | `0.0` | max_abs_grade_share_delta_pp ≤ 15.0 |
+| L1 | PASS | `0.9945174516879862` | p95_latency_ratio_vs_baseline ≤ 2.0 |
+| M1 | PASS | `0.0` | rss_delta_mib ≤ 256.0 |
+
+**overall_verdict**: `FAIL`
+
+### Bundle
+
+Skipped — `export_challenger_bundle` refuses non-PASS. No `validate_artifact_bundle`.
+No MLflow registry write.
+
+### Library versions (Heavy/real host)
+
+| Library | Version |
+| --- | --- |
+| lightgbm | 4.7.0 |
+| scikit-learn | 1.9.0 |
+| numpy | 2.4.6 |
+
+### Blockers remaining
+
+- Q1–Q3 still fail on this real holdout despite larger train (890 vs T8 smoke 128)
+  and cats + offline B1/G1. Do **not** waive `shadow-acceptance-v1` thresholds.
+- Model/feature work needed for quality; T26 online shadow orchestration remains
+  separate. T25 MLflow registry still out of scope.
+
+### Commands run (sanitized)
+
+```bash
+cd /home/app/maxxtrading-model-training
+# preflight: SELECT 1 + CREATE TEMP TABLE via TRAINING_DATABASE_URL (postgresql+psycopg)
+# WRITE_PROBE REJECTED (ReadOnlySqlTransaction)
+uv run python  # run_quality_export(... train_end=2026-01-15, validation_end=2026-04-01,
+               # quotas DEFAULT 800/200/200/n_max=5000, include_categoricals=True, seed=42)
+uv run python  # peer LGBM seed=0; evaluate_challenger_quality(... thresholds RO, result_r)
+# export_challenger_bundle / validate_artifact_bundle: skipped (FAIL)
+```
+
+Secrets, full DSNs, and passwords were never printed.

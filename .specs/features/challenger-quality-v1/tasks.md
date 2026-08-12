@@ -263,14 +263,17 @@ T9
 
 **Done when**:
 
-- [ ] WRITE_PROBE rejected
-- [ ] Holdout ≥ 200; all seven criteria recorded
-- [ ] PASS only if truly all PASS — else FAIL documented (no fabricate)
-- [ ] Pushed evidence commit if AUTH allows
+- [x] WRITE_PROBE rejected
+- [x] Holdout ≥ 200; all seven criteria recorded
+- [x] PASS only if truly all PASS — else FAIL documented (no fabricate)
+- [x] Pushed evidence commit if AUTH allows
 
 **Tests**: none (ops evidence)  
 **Gate**: Heavy/real  
-**Commit**: `docs(model): record CQ-v1 heavy/real challenger evaluation`
+**Commit**: `docs(model): record CQ-v1 heavy/real challenger evaluation`  
+**Recorded**: overall_verdict=`FAIL` (Q1–Q3 FAIL; B1/G1/L1/M1 PASS);
+`dataset_id=95764ac1…`; train=890 / holdout=2300; evidence in
+`docs/t24-challenger-eval-evidence.md` § CQ-v1 Heavy/real.
 
 ---
 
