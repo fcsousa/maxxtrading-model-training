@@ -13,10 +13,12 @@ import resource
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 import lightgbm as lgb
 
+from training import offline_scoring
 from training.artifact_bundle import (
     BundleExportRequest,
     BundleProvenance,
@@ -290,6 +292,101 @@ def overall_verdict(results: Sequence[CriterionResult]) -> str:
     return "PASS"
 
 
+def _holdout_result_r_map(
+    partitions: DatasetPartitions,
+    result_r_by_sample_id: Mapping[str, float | None] | None,
+) -> dict[str, float | None]:
+    if result_r_by_sample_id is not None:
+        return dict(result_r_by_sample_id)
+    return {sample.id: sample.result_r for sample in partitions.holdout}
+
+
+def compute_b1_g1_from_probabilities(
+    *,
+    challenger_probabilities: Sequence[float],
+    baseline_probabilities: Sequence[float],
+    sample_ids: Sequence[str],
+    result_r_by_sample_id: Mapping[str, float | None],
+    thresholds: Mapping[str, Any],
+    confidence: float = 0.5,
+    risk_reward_ratio: float | None = None,
+) -> tuple[float, float]:
+    """Offline B1/G1 from holdout probs. Raises OfflineScoringError when insufficient."""
+    if len(challenger_probabilities) != len(sample_ids):
+        raise offline_scoring.OfflineScoringError("challenger probabilities length mismatch")
+    if len(baseline_probabilities) != len(sample_ids):
+        raise offline_scoring.OfflineScoringError("baseline probabilities length mismatch")
+
+    challenger_grades = [
+        offline_scoring.grade_from_prediction(
+            float(prob),
+            thresholds,
+            confidence=confidence,
+            risk_reward_ratio=risk_reward_ratio,
+        )
+        for prob in challenger_probabilities
+    ]
+    baseline_grades = [
+        offline_scoring.grade_from_prediction(
+            float(prob),
+            thresholds,
+            confidence=confidence,
+            risk_reward_ratio=risk_reward_ratio,
+        )
+        for prob in baseline_probabilities
+    ]
+    challenger_rows = [
+        {"grade": grade, "result_r": result_r_by_sample_id.get(sample_id)}
+        for sample_id, grade in zip(sample_ids, challenger_grades, strict=True)
+    ]
+    baseline_rows = [
+        {"grade": grade, "result_r": result_r_by_sample_id.get(sample_id)}
+        for sample_id, grade in zip(sample_ids, baseline_grades, strict=True)
+    ]
+    b1 = offline_scoring.mean_result_r_at_grade_a_delta(challenger_rows, baseline_rows)
+    g1 = offline_scoring.max_grade_share_delta_pp(challenger_grades, baseline_grades)
+    return b1, g1
+
+
+def _resolve_b1_g1(
+    *,
+    business_proxy_delta: float | None,
+    max_grade_share_delta_pp: float | None,
+    thresholds_path: Path | str | None,
+    result_r_by_sample_id: Mapping[str, float | None] | None,
+    challenger_probabilities: Sequence[float],
+    baseline_probabilities: Sequence[float],
+    sample_ids: Sequence[str],
+    grade_confidence: float,
+    risk_reward_ratio: float | None,
+) -> tuple[float | None, float | None]:
+    """Prefer explicit injections; else compute offline CQ path; else fail closed."""
+    if business_proxy_delta is not None or max_grade_share_delta_pp is not None:
+        return business_proxy_delta, max_grade_share_delta_pp
+
+    if thresholds_path is None and result_r_by_sample_id is None:
+        return None, None
+
+    try:
+        if thresholds_path is None or result_r_by_sample_id is None:
+            raise offline_scoring.OfflineScoringError(
+                "thresholds_path and result_r metadata required for offline B1/G1"
+            )
+        thresholds = offline_scoring.load_thresholds(Path(thresholds_path))
+        return compute_b1_g1_from_probabilities(
+            challenger_probabilities=challenger_probabilities,
+            baseline_probabilities=baseline_probabilities,
+            sample_ids=sample_ids,
+            result_r_by_sample_id=result_r_by_sample_id,
+            thresholds=thresholds,
+            confidence=grade_confidence,
+            risk_reward_ratio=risk_reward_ratio,
+        )
+    except offline_scoring.OfflineScoringError:
+        # Insufficient grade/R inputs → B1/G1 FAIL (not silent skip).
+        return None, None
+
+
 def evaluate_challenger(
     partitions: DatasetPartitions,
     features_by_sample_id: Mapping[str, Sequence[float]],
@@ -299,8 +396,17 @@ def evaluate_challenger(
     config: ChallengerConfig | None = None,
     business_proxy_delta: float | None = None,
     max_grade_share_delta_pp: float | None = None,
+    thresholds_path: Path | str | None = None,
+    result_r_by_sample_id: Mapping[str, float | None] | None = None,
+    grade_confidence: float = 0.5,
+    risk_reward_ratio: float | None = None,
 ) -> ChallengerEvaluation:
-    """Train on train-only, score holdout, probe resources, gate against T23."""
+    """Train on train-only, score holdout, probe resources, gate against T23.
+
+    CQ path (CQ-08..CQ-11): when ``thresholds_path`` / result_r metadata are
+    provided and B1/G1 are not injected, grades are computed offline and both
+    criteria are gated. Insufficient inputs fail closed (B1/G1 FAIL).
+    """
     cfg = config or ChallengerConfig()
     if len(partitions.holdout) < MIN_HOLDOUT_SAMPLES:
         raise ChallengerEvalError(
@@ -322,11 +428,31 @@ def evaluate_challenger(
         probe_rows,
         repeats=cfg.probe_repeats,
     )
+
+    challenger_probs = predict_proba_win(model, probe_rows)
+    baseline_probs = [float(prob) for prob in baseline_predict(probe_rows)]
+    resolved_result_r = (
+        _holdout_result_r_map(partitions, result_r_by_sample_id)
+        if thresholds_path is not None or result_r_by_sample_id is not None
+        else result_r_by_sample_id
+    )
+    b1, g1 = _resolve_b1_g1(
+        business_proxy_delta=business_proxy_delta,
+        max_grade_share_delta_pp=max_grade_share_delta_pp,
+        thresholds_path=thresholds_path,
+        result_r_by_sample_id=resolved_result_r,
+        challenger_probabilities=challenger_probs,
+        baseline_probabilities=baseline_probs,
+        sample_ids=holdout_ids,
+        grade_confidence=grade_confidence,
+        risk_reward_ratio=risk_reward_ratio,
+    )
+
     results = gate_challenger_metrics(
         holdout_metrics,
         probe_metrics,
-        business_proxy_delta=business_proxy_delta,
-        max_grade_share_delta_pp=max_grade_share_delta_pp,
+        business_proxy_delta=b1,
+        max_grade_share_delta_pp=g1,
     )
     return ChallengerEvaluation(
         config=cfg,
@@ -337,6 +463,32 @@ def evaluate_challenger(
         criterion_results=results,
         overall_verdict=overall_verdict(results),
         library_versions=_library_versions(),
+    )
+
+
+def evaluate_challenger_quality(
+    partitions: DatasetPartitions,
+    features_by_sample_id: Mapping[str, Sequence[float]],
+    *,
+    dataset_id: str,
+    baseline_predict: PredictFn,
+    thresholds_path: Path | str,
+    result_r_by_sample_id: Mapping[str, float | None] | None = None,
+    config: ChallengerConfig | None = None,
+    grade_confidence: float = 0.5,
+    risk_reward_ratio: float | None = None,
+) -> ChallengerEvaluation:
+    """CQ evaluate path: always attempt offline B1/G1 (no silent None omission)."""
+    return evaluate_challenger(
+        partitions,
+        features_by_sample_id,
+        dataset_id=dataset_id,
+        baseline_predict=baseline_predict,
+        config=config,
+        thresholds_path=thresholds_path,
+        result_r_by_sample_id=result_r_by_sample_id,
+        grade_confidence=grade_confidence,
+        risk_reward_ratio=risk_reward_ratio,
     )
 
 

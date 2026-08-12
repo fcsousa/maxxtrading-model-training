@@ -12,6 +12,7 @@ from training.challenger_config import ChallengerConfig
 from training.challenger_eval import (
     ChallengerEvalError,
     evaluate_challenger,
+    evaluate_challenger_quality,
     export_challenger_bundle,
     gate_challenger_metrics,
     overall_verdict,
@@ -221,3 +222,89 @@ class TestEndToEndSynthetic:
                 model_version="should_not_write",
                 training_commit="b" * 40,
             )
+
+
+_THRESHOLDS_FIXTURE = Path(__file__).resolve().parent / "fixtures" / "thresholds.json"
+
+
+class TestChallengerQualityGate:
+    def test_q1_fail_still_fails_overall_with_passing_b1_g1(self) -> None:
+        """Isolation: Q1 FAIL keeps overall FAIL even when B1/G1 pass."""
+        partitions, features = _separable_partitions()
+        # Scramble holdout features so AUC collapses while B1/G1 are injected PASS.
+        scrambled = dict(features)
+        for index, sample in enumerate(partitions.holdout):
+            scrambled[sample.id] = [0.01 * (index % 3), 0.0, 0.0]
+
+        evaluation = evaluate_challenger(
+            partitions,
+            scrambled,
+            dataset_id="ds-q1-isolation",
+            baseline_predict=_fit_baseline_predict(partitions, features),
+            business_proxy_delta=0.0,
+            max_grade_share_delta_pp=0.0,
+        )
+        by_id = {result.criterion_id: result for result in evaluation.criterion_results}
+        assert by_id["Q1"].verdict == "FAIL"
+        assert by_id["B1"].verdict == "PASS"
+        assert by_id["G1"].verdict == "PASS"
+        assert evaluation.overall_verdict == "FAIL"
+
+    def test_quality_path_can_pass_all_seven(self) -> None:
+        partitions, features = _separable_partitions()
+        # Peer baseline with same seed → near-identical grades (G1≈0); constant R → B1≈0.
+        baseline_same_seed = train_challenger(
+            partitions,
+            features,
+            dataset_id="baseline-peer-seed7",
+            config=ChallengerConfig(seed=7),
+        )
+
+        def baseline_predict(rows):
+            return predict_proba_win(baseline_same_seed, rows)
+
+        result_r = {sample.id: 1.0 for sample in partitions.holdout}
+        evaluation = evaluate_challenger_quality(
+            partitions,
+            features,
+            dataset_id="ds-cq-pass-seven",
+            baseline_predict=baseline_predict,
+            thresholds_path=_THRESHOLDS_FIXTURE,
+            result_r_by_sample_id=result_r,
+            config=ChallengerConfig(seed=7),
+            grade_confidence=0.8,
+            risk_reward_ratio=2.0,
+        )
+        by_id = {result.criterion_id: result for result in evaluation.criterion_results}
+        assert all(result.verdict == "PASS" for result in evaluation.criterion_results), by_id
+        assert evaluation.overall_verdict == "PASS"
+        assert len(SIGNED_CRITERIA) == 7
+
+    def test_missing_result_r_on_grade_a_fails_b1(self) -> None:
+        partitions, features = _separable_partitions()
+        baseline_model = train_challenger(
+            partitions,
+            features,
+            dataset_id="baseline-peer-seed7",
+            config=ChallengerConfig(seed=7),
+        )
+
+        def baseline_predict(rows):
+            return predict_proba_win(baseline_model, rows)
+
+        # All result_r None → grade-A sets empty of R → B1 fail-closed.
+        result_r = {sample.id: None for sample in partitions.holdout}
+        evaluation = evaluate_challenger_quality(
+            partitions,
+            features,
+            dataset_id="ds-cq-b1-fail",
+            baseline_predict=baseline_predict,
+            thresholds_path=_THRESHOLDS_FIXTURE,
+            result_r_by_sample_id=result_r,
+            config=ChallengerConfig(seed=7),
+            grade_confidence=0.8,
+            risk_reward_ratio=2.0,
+        )
+        by_id = {result.criterion_id: result for result in evaluation.criterion_results}
+        assert by_id["B1"].verdict == "FAIL"
+        assert evaluation.overall_verdict == "FAIL"
