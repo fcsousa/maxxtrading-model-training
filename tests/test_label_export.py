@@ -198,8 +198,18 @@ class TestToRowsHappyPath:
 
         assert rows[0].entry_indicator_pack_id is None
 
+    def test_result_r_present_when_column_non_null(self):
+        rows = list(_to_rows(iter([_row(result_r=1.5)])))
+
+        assert rows[0].result_r == 1.5
+
+    def test_result_r_null_stays_none_without_imputation(self):
+        rows = list(_to_rows(iter([_row(result_r=None)])))
+
+        assert rows[0].result_r is None
+
     def test_all_fields_pass_through(self):
-        row = _row()
+        row = _row(result_r=2.0)
 
         result = list(_to_rows(iter([row])))[0]
 
@@ -211,9 +221,15 @@ class TestToRowsHappyPath:
         assert result.timeframe == row.timeframe
         assert result.side == row.side
         assert result.entry_indicator_pack_id == row.entry_indicator_pack_id
+        assert result.result_r == 2.0
 
 
 class TestQueryEncodesDispositionFilters:
+    def test_query_selects_result_r(self):
+        from training.label_export import _SELECT_LABELED_SAMPLES
+
+        assert "ts.result_r" in _SELECT_LABELED_SAMPLES
+
     def test_query_filters_complete_quality_win_loss_only(self):
         from training.label_export import _SELECT_LABELED_SAMPLES
 

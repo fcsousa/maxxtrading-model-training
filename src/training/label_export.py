@@ -49,6 +49,7 @@ _SELECT_LABELED_SAMPLES = """
         ts.timeframe,
         ts.side,
         ts.result_label,
+        ts.result_r,
         ts.entry_indicator_pack_id
     FROM public.trade_samples ts
     LEFT JOIN public.historical_trades ht ON ht.id = ts.historical_trade_id
@@ -74,6 +75,7 @@ class LabeledTradeSample:
     side: str
     label: int  # 1 = win, 0 = loss — docs/label-policy.md §2
     entry_indicator_pack_id: str | None
+    result_r: float | None = None  # nullable; never imputed (CQ-09)
 
 
 _EXPECTED_COLUMNS: dict[str, type | tuple[type, ...]] = {
@@ -154,8 +156,16 @@ def _to_rows(result: Iterator[Any]) -> Iterator[LabeledTradeSample]:
                 f"{type(pack_id).__name__}"
             )
 
+        result_r: Any = getattr(row, "result_r", None)
+        if result_r is not None and not isinstance(result_r, (int, float)):
+            raise LabelExportError(
+                f"trade_samples row column 'result_r' has unexpected type {type(result_r).__name__}"
+            )
+        result_r_value = float(result_r) if result_r is not None else None
+
         yield LabeledTradeSample(
             label=_LABEL_VALUES[result_label],
             entry_indicator_pack_id=pack_id,
+            result_r=result_r_value,
             **values,
         )
