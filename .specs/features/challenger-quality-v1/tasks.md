@@ -80,10 +80,10 @@ T9
 
 **Done when**:
 
-- [ ] `holdout_min < 200` rejected at construction
-- [ ] Quotas enforced per temporal partition
-- [ ] Underfill raises with sanitized counts
-- [ ] ≥4 unit tests; quick gate green
+- [x] `holdout_min < 200` rejected at construction
+- [x] Quotas enforced per temporal partition
+- [x] Underfill raises with sanitized counts
+- [x] ≥4 unit tests; quick gate green
 
 **Tests**: unit  
 **Gate**: quick  
@@ -103,10 +103,10 @@ T9
 
 **Done when**:
 
-- [ ] Does not break existing `run_export_smoke` behavior/tests
-- [ ] Manifest records quotas + included cats flag placeholders
-- [ ] Refuses if engine URL looks like app DATABASE_URL (best-effort guard)
-- [ ] ≥3 unit tests; quick gate green
+- [x] Does not break existing `run_export_smoke` behavior/tests
+- [x] Manifest records quotas + included cats flag placeholders
+- [x] Refuses if engine URL looks like app DATABASE_URL (best-effort guard)
+- [x] ≥3 unit tests; quick gate green
 
 **Tests**: unit  
 **Gate**: quick  
@@ -126,10 +126,10 @@ T9
 
 **Done when**:
 
-- [ ] `result_r` present when DB column non-null
-- [ ] Null stays None (no imputation)
-- [ ] Existing label tests updated; ≥2 new assertions
-- [ ] Quick gate green
+- [x] `result_r` present when DB column non-null
+- [x] Null stays None (no imputation)
+- [x] Existing label tests updated; ≥2 new assertions
+- [x] Quick gate green
 
 **Tests**: unit  
 **Gate**: quick  
@@ -149,10 +149,10 @@ T9
 
 **Done when**:
 
-- [ ] Fit on train only; transform val/holdout
-- [ ] Missing cat excludes sample
-- [ ] Deterministic columns order
-- [ ] ≥4 unit tests; quick gate green
+- [x] Fit on train only; transform val/holdout
+- [x] Missing cat excludes sample
+- [x] Deterministic columns order
+- [x] ≥4 unit tests; quick gate green
 
 **Tests**: unit  
 **Gate**: quick  
@@ -172,9 +172,9 @@ T9
 
 **Done when**:
 
-- [ ] Manifest `deferred_categoricals=()` and records included cats for CQ datasets
-- [ ] Bundle validate passes with encoder when exported
-- [ ] ≥3 unit tests; quick gate green
+- [x] Manifest `deferred_categoricals=()` and records included cats for CQ datasets
+- [x] Bundle validate passes with encoder when exported
+- [x] ≥3 unit tests; quick gate green
 
 **Tests**: unit  
 **Gate**: quick  
