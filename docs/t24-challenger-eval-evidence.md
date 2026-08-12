@@ -89,3 +89,73 @@ Operator authorized real training in-session. Sanitized preflight:
 No SELECT of trading rows was executed. No write attempted beyond the failed
 connect. Heavy/real holdout run remains blocked on network path to the RO host
 (typically LAN/VPN from the training machine), not on missing AUTH.
+
+## Heavy/real run (2026-08-11)
+
+**Verdict**: **BLOCKED** — Postgres RO host unreachable on `:5432` from the agent
+runtime. No smoke export, no challenger train/eval, no bundle export, no MLflow
+writes. Not a PASS.
+
+### Preflight (sanitized)
+
+| Check | Result |
+| --- | --- |
+| Source URL | `TRAINING_DATABASE_URL` only (`SCOREENGINE_READONLY_DATABASE_URL` identical host/user/db; unused as alternate credential) |
+| Score Engine `DATABASE_URL` | **not used** (different DB name `maxxtrading-scoreengine`, user `postgres`) |
+| Username contains `readonly` | yes (`scoreengine_readonly`) |
+| DB name | `maxxtrading` |
+| URL ≠ `DATABASE_URL` | yes |
+| Host / port | `192.168.3.10:5432` |
+| Dialect planned | `postgresql+psycopg` |
+| TCP `/dev/tcp` + `connect_ex` to `:5432` | **FAIL** — `ECONNREFUSED` (111); SQLAlchemy `OperationalError` (“server closed the connection unexpectedly”) |
+| `SELECT 1` | **not executed** (connect failed) |
+| Write probe `CREATE TEMP TABLE` | **not executed** (connect failed; prior AUTH runs on reachable path had rejection) |
+| SSH reachability `:22` (diagnostic only) | open (`connect_ex=0`) — host L3 reachable; Postgres port closed/refused |
+| Invented host / Score Engine DSN fallback | **not used** |
+
+### Planned window (not executed)
+
+Same T8 window, enlarged `n_max` for holdout ≥ 200 if data allows:
+
+| Param | Value |
+| --- | --- |
+| `window_start` | `2025-07-29T00:00:00+00:00` |
+| `window_end` / `as_of` / `holdout_end` | `2026-07-02T00:00:00+00:00` |
+| `train_end` | `2025-11-01T00:00:00+00:00` |
+| `validation_end` | `2026-03-01T00:00:00+00:00` |
+| `n_max` | `2000` (intended) |
+| `label_policy_ref` | `docs/label-policy.md` |
+| `seed` | `42` |
+| FD | `/workspace/app/artifacts/feature_dictionary_v1.json` (read-only) |
+
+### Metrics / gates
+
+| Item | Value |
+| --- | --- |
+| `dataset_id` | n/a |
+| partition counts | n/a |
+| `holdout_metrics` | n/a |
+| `probe_metrics` | n/a |
+| Q1–Q3 / B1 / G1 / L1 / M1 | n/a (no eval) |
+| overall | **BLOCKED** (network) |
+
+### Network recovery attempted
+
+1. Confirmed `TRAINING_DATABASE_URL` host/port (`192.168.3.10:5432`).
+2. TCP probes (`/dev/tcp`, Python `connect_ex` timeouts 2/5/10s) → refused.
+3. WSL/Docker path check: container on `172.22.0.0/16`; gateway `172.22.0.1`; no route that opens Postgres on the LAN host.
+4. Same RO URL via `SCOREENGINE_READONLY_DATABASE_URL` (identical) — same failure.
+5. Did **not** retarget to Score Engine `DATABASE_URL` or any other host.
+
+### Blockers remaining
+
+- Operator must expose Postgres on `192.168.3.10:5432` to this runtime (service up + `listen_addresses` / firewall / `pg_hba` for the Docker/WSL client path), **or** run Heavy/real T24 from a machine already on the LAN/VPN that can complete the RO preflight (`SELECT 1` + rejected write probe).
+- After connectivity: holdout N ≥ 200 (`MIN_HOLDOUT_SAMPLES`); peer LightGBM/logistic baseline for L1/M1; B1/G1 fail-closed (`None`) until T26 shadow population unless true deltas are derived.
+- T25 MLflow registry writes remain out of scope.
+
+### Exact next operator action
+
+On a host that can reach the RO DB: verify
+`psql "$TRAINING_DATABASE_URL" -c 'SELECT 1'` succeeds and
+`CREATE TEMP TABLE t24_probe(id int)` is rejected; then re-run this Heavy/real
+procedure (smoke `n_max≥2000` → `evaluate_challenger` → evidence section).
