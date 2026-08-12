@@ -20,12 +20,17 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from sqlalchemy.engine import Engine
 
+from training.categorical_encode import (
+    DEFAULT_CATEGORICAL_NAMES,
+    fit_transform_categoricals,
+    transform_categoricals,
+)
 from training.dataset_builder import DatasetManifest, DatasetPartitions, build_dataset
 from training.feature_export import PackFeatures, export_pack_features
 from training.label_export import LabeledTradeSample, export_labeled_samples
@@ -44,7 +49,7 @@ DEFAULT_QUALITY_QUOTAS = QuotaSpec(
     n_max=5000,
 )
 
-_INCLUDED_CATS_PLACEHOLDER = ("trend_regime", "volatility_regime")
+_INCLUDED_CATS = DEFAULT_CATEGORICAL_NAMES
 
 
 class QualityExportError(Exception):
@@ -70,6 +75,8 @@ class QualityExportReport:
     quotas: QuotaSpec
     included_categoricals: tuple[str, ...]
     partitions: DatasetPartitions | None = None
+    encoder: object | None = None
+    feature_vectors: dict[str, list[float]] | None = None
 
     def to_sanitized_dict(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -185,6 +192,33 @@ def run_quality_export(
     )
 
 
+def _ensure_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
+
+
+def _partition_name(
+    entry_at: datetime,
+    *,
+    train_end: datetime,
+    validation_end: datetime,
+    holdout_end: datetime,
+) -> str | None:
+    entry = _ensure_utc(entry_at)
+    if entry >= _ensure_utc(holdout_end):
+        return None
+    if entry < _ensure_utc(train_end):
+        return "train"
+    if entry < _ensure_utc(validation_end):
+        return "validation"
+    return "holdout"
+
+
+def _cat_row_complete(cats: dict[str, str], cat_names: Sequence[str]) -> bool:
+    return all(name in cats and cats[name] for name in cat_names)
+
+
 def _assemble_quality(
     *,
     labels: Sequence[LabeledTradeSample],
@@ -201,22 +235,19 @@ def _assemble_quality(
     quotas: QuotaSpec,
     include_categoricals: bool,
 ) -> QualityExportReport:
-    included = _INCLUDED_CATS_PLACEHOLDER if include_categoricals else ()
+    included = _INCLUDED_CATS if include_categoricals else ()
+    deferred: tuple[str, ...] = () if include_categoricals else feature_order.deferred_categoricals
 
-    try:
-        batch = select_quota_batch(
-            labels=labels,
-            packs=packs,
-            feature_order=feature_order.names,
-            train_end=train_end,
-            validation_end=validation_end,
-            holdout_end=holdout_end,
-            quotas=quotas,
-        )
-    except QuotaBatchError:
-        raise
+    batch = select_quota_batch(
+        labels=labels,
+        packs=packs,
+        feature_order=feature_order.names,
+        train_end=train_end,
+        validation_end=validation_end,
+        holdout_end=holdout_end,
+        quotas=quotas,
+    )
 
-    selected_ids = set(batch.selected_sample_ids)
     labels_by_id = {sample.id: sample for sample in labels}
     packs_by_id = {pack.sample_id: pack for pack in packs}
     features_by_id = {
@@ -230,6 +261,9 @@ def _assemble_quality(
     manifest: DatasetManifest | None = None
     partitions: DatasetPartitions | None = None
     stop_reason: str | None = None
+    encoder: object | None = None
+    feature_vectors: dict[str, list[float]] | None = None
+    batch_size = len(batch.selected_sample_ids)
 
     if coverage.vectorized == 0:
         stop_reason = (
@@ -237,14 +271,106 @@ def _assemble_quality(
             f"({len(feature_order.names)} fields) after quota selection"
         )
     else:
-        vectorized_labels = [
-            labels_by_id[sample_id]
+        eligible_ids = [
+            sample_id
             for sample_id in sorted(
                 coverage.vectors,
                 key=lambda sid: (labels_by_id[sid].entry_at, sid),
             )
-            if sample_id in selected_ids and sample_id in labels_by_id
+            if sample_id in labels_by_id
         ]
+
+        if include_categoricals:
+            eligible_ids = [
+                sample_id
+                for sample_id in eligible_ids
+                if sample_id in packs_by_id
+                and _cat_row_complete(packs_by_id[sample_id].categoricals, included)
+            ]
+            counts = {"train": 0, "validation": 0, "holdout": 0}
+            for sample_id in eligible_ids:
+                part = _partition_name(
+                    labels_by_id[sample_id].entry_at,
+                    train_end=train_end,
+                    validation_end=validation_end,
+                    holdout_end=holdout_end,
+                )
+                if part is not None:
+                    counts[part] += 1
+            mins = {
+                "train": quotas.train_min,
+                "validation": quotas.validation_min,
+                "holdout": quotas.holdout_min,
+            }
+            if any(counts[name] < mins[name] for name in mins):
+                raise QuotaBatchError(
+                    "partition quotas unmet after categorical filter: "
+                    f"train={counts['train']}/{mins['train']}, "
+                    f"validation={counts['validation']}/{mins['validation']}, "
+                    f"holdout={counts['holdout']}/{mins['holdout']}",
+                    counts=counts,
+                )
+
+            train_ids = [
+                sample_id
+                for sample_id in eligible_ids
+                if _partition_name(
+                    labels_by_id[sample_id].entry_at,
+                    train_end=train_end,
+                    validation_end=validation_end,
+                    holdout_end=holdout_end,
+                )
+                == "train"
+            ]
+            train_rows = [dict(packs_by_id[sid].categoricals) for sid in train_ids]
+            encoder, _, kept_train = fit_transform_categoricals(
+                train_rows,
+                sample_ids=tuple(train_ids),
+                cat_names=included,
+            )
+            kept_train_set = set(kept_train)
+            eligible_ids = [
+                sample_id
+                for sample_id in eligible_ids
+                if sample_id not in train_ids or sample_id in kept_train_set
+            ]
+
+            all_rows = [dict(packs_by_id[sid].categoricals) for sid in eligible_ids]
+            cat_matrix, skipped = transform_categoricals(
+                encoder,
+                all_rows,
+                sample_ids=tuple(eligible_ids),
+                cat_names=included,
+            )
+            if skipped:
+                skip_set = set(skipped)
+                eligible_ids = [sid for sid in eligible_ids if sid not in skip_set]
+                # Re-transform aligned rows after skip (should be rare if pre-filtered).
+                all_rows = [dict(packs_by_id[sid].categoricals) for sid in eligible_ids]
+                cat_matrix, skipped = transform_categoricals(
+                    encoder,
+                    all_rows,
+                    sample_ids=tuple(eligible_ids),
+                    cat_names=included,
+                )
+                if skipped:
+                    raise QualityExportError(
+                        f"categorical transform skipped unexpected ids: {len(skipped)}"
+                    )
+
+            feature_vectors = {}
+            for index, sample_id in enumerate(eligible_ids):
+                numerical = coverage.vectors[sample_id]
+                encoded = cat_matrix[index].tolist()
+                feature_vectors[sample_id] = list(numerical) + encoded
+
+            batch_size = len(eligible_ids)
+        else:
+            feature_vectors = {
+                sample_id: list(coverage.vectors[sample_id]) for sample_id in eligible_ids
+            }
+
+        vectorized_labels = [labels_by_id[sample_id] for sample_id in eligible_ids]
         partitions, manifest = build_dataset(
             vectorized_labels,
             window_start=window_start,
@@ -257,7 +383,7 @@ def _assemble_quality(
             seed=seed,
             feature_order=feature_order.names,
             feature_order_source=feature_order.source,
-            deferred_categoricals=feature_order.deferred_categoricals,
+            deferred_categoricals=deferred,
         )
         dataset_id = manifest.dataset_id
 
@@ -268,15 +394,17 @@ def _assemble_quality(
         n_max=quotas.n_max,
         labels_eligible=len(labels),
         packs_succeeded=len(packs),
-        batch_size=len(batch.selected_sample_ids),
+        batch_size=batch_size,
         coverage=coverage,
         feature_order=feature_order.names,
         feature_order_source=feature_order.source,
-        deferred_categoricals=feature_order.deferred_categoricals,
+        deferred_categoricals=deferred,
         dataset_id=dataset_id,
         manifest=manifest,
         stop_reason=stop_reason,
         quotas=quotas,
         included_categoricals=included,
         partitions=partitions,
+        encoder=encoder,
+        feature_vectors=feature_vectors,
     )

@@ -1,11 +1,20 @@
-"""Unit tests for challenger-quality export (CQ-01, CQ-03, CQ-04)."""
+"""Unit tests for challenger-quality export (CQ-01, CQ-03, CQ-04, CQ-05, CQ-07)."""
 
 from datetime import datetime
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
+from sklearn.linear_model import LogisticRegression
 
+from training.artifact_bundle import (
+    BundleExportRequest,
+    BundleProvenance,
+    FeatureSchemaSpec,
+    export_artifact_bundle,
+    validate_artifact_bundle,
+)
 from training.feature_export import PackFeatures
 from training.label_export import LabeledTradeSample
 from training.quality_export import (
@@ -33,11 +42,19 @@ def _sample(sample_id: str, entry_at: datetime, label: int = 1) -> LabeledTradeS
     )
 
 
-def _pack(sample_id: str, features: dict[str, float] | None = None) -> PackFeatures:
+def _pack(
+    sample_id: str,
+    features: dict[str, float] | None = None,
+    *,
+    categoricals: dict[str, str] | None = None,
+) -> PackFeatures:
     return PackFeatures(
         sample_id=sample_id,
         features_version="4",
         features=features if features is not None else {"ema_9": 1.0, "rsi_14": 50.0},
+        categoricals=categoricals
+        if categoricals is not None
+        else {"trend_regime": "up", "volatility_regime": "low"},
     )
 
 
@@ -67,7 +84,16 @@ def _make_partitioned(
         *[_sample(f"v{i}", datetime(2026, 2, 1 + (i % 25))) for i in range(n_validation)],
         *[_sample(f"h{i}", datetime(2026, 3, 1 + (i % 28))) for i in range(n_holdout)],
     ]
-    packs = [_pack(sample.id) for sample in labels]
+    packs = [
+        _pack(
+            sample.id,
+            categoricals={
+                "trend_regime": "up" if i % 2 == 0 else "down",
+                "volatility_regime": "low" if i % 3 == 0 else "high",
+            },
+        )
+        for i, sample in enumerate(labels)
+    ]
     return labels, packs
 
 
@@ -125,6 +151,98 @@ class TestAssembleQuality:
         )
         assert report.dataset_id is not None
         assert report.stop_reason is None
+
+
+class TestCategoricalsInQualityExport:
+    def test_deferred_empty_and_vectors_concatenated(self) -> None:
+        labels, packs = _make_partitioned(n_train=10, n_validation=5, n_holdout=210)
+        quotas = QuotaSpec(train_min=3, validation_min=2, holdout_min=200, n_max=5000)
+
+        report = _assemble_quality(
+            labels=labels,
+            packs=packs,
+            feature_order=FEATURE_ORDER,
+            quotas=quotas,
+            include_categoricals=True,
+            **WINDOW,
+        )
+
+        assert report.deferred_categoricals == ()
+        assert report.manifest is not None
+        assert report.manifest.deferred_categoricals == ()
+        assert report.encoder is not None
+        assert report.feature_vectors is not None
+        sample_id = next(iter(report.feature_vectors))
+        # numerical-2 + one-hot cats (>2)
+        assert len(report.feature_vectors[sample_id]) > 2
+
+    def test_missing_cat_underfill_fail_closed(self) -> None:
+        labels, packs = _make_partitioned(n_train=10, n_validation=5, n_holdout=210)
+        # Strip cats from most holdout packs so quota fails after filter.
+        packs = [
+            PackFeatures(
+                sample_id=pack.sample_id,
+                features_version=pack.features_version,
+                features=pack.features,
+                categoricals={} if pack.sample_id.startswith("h") else pack.categoricals,
+            )
+            for pack in packs
+        ]
+        quotas = QuotaSpec(train_min=3, validation_min=2, holdout_min=200, n_max=5000)
+
+        with pytest.raises(QuotaBatchError) as exc_info:
+            _assemble_quality(
+                labels=labels,
+                packs=packs,
+                feature_order=FEATURE_ORDER,
+                quotas=quotas,
+                include_categoricals=True,
+                **WINDOW,
+            )
+        assert exc_info.value.counts["holdout"] == 0
+
+    def test_encoder_bundle_validates(self, tmp_path: Path) -> None:
+        labels, packs = _make_partitioned(n_train=10, n_validation=5, n_holdout=210)
+        quotas = QuotaSpec(train_min=3, validation_min=2, holdout_min=200, n_max=5000)
+        report = _assemble_quality(
+            labels=labels,
+            packs=packs,
+            feature_order=FEATURE_ORDER,
+            quotas=quotas,
+            include_categoricals=True,
+            **WINDOW,
+        )
+        assert report.encoder is not None
+        assert report.feature_vectors is not None
+        assert report.dataset_id is not None
+
+        x_rows = list(report.feature_vectors.values())[:4]
+        y_rows = [0, 1, 0, 1]
+        model = LogisticRegression(random_state=42).fit(x_rows, y_rows)
+        exported = export_artifact_bundle(
+            BundleExportRequest(
+                model=model,
+                feature_schema=FeatureSchemaSpec(
+                    features_version="feature_dictionary_v1",
+                    numeric_features=("ema_9", "rsi_14"),
+                    categorical_features=("trend_regime", "volatility_regime"),
+                ),
+                model_version="score_model_v1.0.0",
+                model_name="score_model",
+                algorithm="logistic_regression",
+                provenance=BundleProvenance(
+                    dataset_id=report.dataset_id,
+                    training_commit="abc123",
+                    label_policy_ref="docs/label-policy.md",
+                    seed=42,
+                    library_versions={"scikit-learn": "1.5.0"},
+                ),
+                encoder=report.encoder,
+            ),
+            tmp_path / "bundle",
+        )
+        validate_artifact_bundle(exported.output_dir)
+        assert exported.encoder_sha256 is not None
 
 
 class TestScoreEngineDbGuard:
