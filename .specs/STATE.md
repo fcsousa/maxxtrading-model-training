@@ -8,11 +8,14 @@
 
 ## Handoff
 
-**Última atualização:** 2026-08-12 — T9 Heavy/real CQ-v1 executado (AUTH)
+**Última atualização:** 2026-08-12 — Specify in progress: `challenger-signal-v1`
 
-- T1–T9 done; validation code PASS; Heavy/real **overall FAIL** (Q1–Q3)
-- dataset_id `95764ac1…`; train=890 holdout=2300; B1/G1/L1/M1 PASS; Q1–Q3 FAIL
-- Commits evidência: `ebed07c` (+ fix Decimal `cbcd8bd`); push OK
-- Limiares `shadow-acceptance-v1` **inalterados**
-- Próximo: melhorar sinal (features/modelo além V1 defaults — fora do MVP 3A) ou aceitar FAIL e não promover; T25 bloqueado sem PASS
+- **Specify in progress**; waiting gray-area answers for
+  `.specs/features/challenger-signal-v1/` (`spec.md` Draft + `context.md`)
+- Precedente CQ-v1: T1–T9 done; Heavy/real **overall FAIL** (Q1–Q3);
+  train=890 holdout=2300; B1/G1/L1/M1 PASS; root cause = fit label/features
+  (não starvation); limiares `shadow-acceptance-v1` **inalterados**
+- Próximo: usuário responde gray areas (`1x 2y 3z 4w`) → fechar Assumptions →
+  Confirm spec → **só então** Design (não iniciar Design antes)
+- T25 bloqueado sem PASS de qualidade
 
