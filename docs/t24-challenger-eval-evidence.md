@@ -90,12 +90,16 @@ RO (session claim). Executed on a host with LAN access to the RO Postgres.
 L1/M1 passed. Bundle export skipped (`overall_verdict != PASS`). No MLflow
 registry writes (T25 out of scope). Not a fabricated PASS.
 
+This section refreshes the authorized Heavy/real evaluation with the run
+recorded below (same T8 window / `n_max=2000`; deterministic quality metrics
+match prior Heavy attempt; probe latency re-measured on this host).
+
 ### Preflight (sanitized)
 
 | Check | Result |
 | --- | --- |
 | Source URL | `TRAINING_DATABASE_URL` only |
-| Score Engine `DATABASE_URL` | **not used** (db `maxxtrading-scoreengine`, user `postgres`) |
+| Score Engine `DATABASE_URL` | **not used** |
 | Username contains `readonly` | yes (`scoreengine_readonly`) |
 | DB name | `maxxtrading` |
 | URL ≠ `DATABASE_URL` | yes |
@@ -107,8 +111,7 @@ registry writes (T25 out of scope). Not a fabricated PASS.
 ### Export smoke inputs
 
 T8 window preserved; `n_max` raised so holdout can reach `MIN_HOLDOUT_SAMPLES`
-(200). Partition boundaries unchanged from T8 (temporal split already yields
-holdout ≥ 200 at `n_max=2000`).
+(200). Partition boundaries unchanged from T8.
 
 | Param | Value |
 | --- | --- |
@@ -116,13 +119,10 @@ holdout ≥ 200 at `n_max=2000`).
 | `window_end` / `as_of` / `holdout_end` | `2026-07-02T00:00:00+00:00` |
 | `train_end` | `2025-11-01T00:00:00+00:00` |
 | `validation_end` | `2026-03-01T00:00:00+00:00` |
-| `n_max` | `2000` (T8 used 100; first successful Heavy attempt) |
+| `n_max` | `2000` |
 | `label_policy_ref` | `docs/label-policy.md` |
 | `seed` | `42` |
 | FD | `/workspace/app/artifacts/feature_dictionary_v1.json` (read-only) |
-
-Tried: `n_max=2000` with T8 boundaries — sufficient (`holdout_n=307`). No need
-for wider calendar window.
 
 ### Smoke coverage / partitions
 
@@ -143,8 +143,8 @@ for wider calendar window.
 | `ChallengerConfig.seed` | `42` |
 | algorithm / params | LightGBM V1 defaults (`challenger_config.py`) |
 | `baseline_predict` | peer LightGBM **same defaults**, `random_state=0` (L1 fairness; not production `baseline_heuristic`) |
-| `business_proxy_delta` (B1) | `None` — `LabeledTradeSample` has no `result_r`; no Score Engine grades in this path |
-| `max_grade_share_delta_pp` (G1) | `None` — deferred pending T26 shadow orchestrator |
+| `business_proxy_delta` (B1) | `None` — fail-closed until T26; no honest grade-A `result_r` without inventing Score Engine grades |
+| `max_grade_share_delta_pp` (G1) | `None` — fail-closed until T26 |
 
 ### Observed metrics (signed holdout)
 
@@ -154,28 +154,28 @@ for wider calendar window.
 | `brier_score` | `0.3719825391593575` |
 | `ece` | `0.3337181837595723` |
 | `holdout_n` | `307` |
-| `p95_latency_ratio_vs_baseline` | `1.0676743153767` (probe N=307) |
+| `p95_latency_ratio_vs_baseline` | `1.2425715487536781` (probe N=307) |
 | `rss_delta_mib` | `0.0` |
-| baseline / challenger p95 ms | `~1.004` / `~1.072` |
+| baseline / challenger p95 ms | `1.4447028021095312` / `1.7951465983060189` |
 
 ### Gate results (`shadow-acceptance-v1`)
 
-| ID | Verdict | Notes |
-| --- | --- | --- |
-| Q1 | FAIL | auc < 0.55 |
-| Q2 | FAIL | brier > 0.25 |
-| Q3 | FAIL | ece > 0.10 |
-| B1 | FAIL | fail-closed (`None`); no grade-A R without Score Engine grading |
-| G1 | FAIL | fail-closed (`None`); grade shares need T26 |
-| L1 | PASS | ratio ≤ 2.0 |
-| M1 | PASS | rss delta ≤ 256 MiB |
+| ID | Verdict | Observed | Threshold |
+| --- | --- | --- | --- |
+| Q1 | FAIL | `0.5127041742286751` | auc_roc ≥ 0.55 |
+| Q2 | FAIL | `0.3719825391593575` | brier_score ≤ 0.25 |
+| Q3 | FAIL | `0.3337181837595723` | ece ≤ 0.10 |
+| B1 | FAIL | `None` (fail-closed) | mean_result_r_at_grade_A_delta ≥ 0.0 |
+| G1 | FAIL | `None` (fail-closed) | max_abs_grade_share_delta_pp ≤ 15.0 |
+| L1 | PASS | `1.2425715487536781` | p95_latency_ratio_vs_baseline ≤ 2.0 |
+| M1 | PASS | `0.0` | rss_delta_mib ≤ 256.0 |
 
 **overall_verdict**: `FAIL`
 
 ### Bundle
 
 Skipped — `export_challenger_bundle` refuses non-PASS evaluations. No
-`model_sha256` recorded.
+`validate_artifact_bundle` for this run. No MLflow registry write.
 
 ### Library versions (Heavy/real host)
 
@@ -187,11 +187,11 @@ Skipped — `export_challenger_bundle` refuses non-PASS evaluations. No
 
 ### Blockers remaining
 
-- Quality gates Q1–Q3 failed on this real holdout (small train N=128 under T8
+- Quality gates Q1–Q3 failed on this real holdout (train N=128 under T8
   temporal cut with `n_max=2000` may contribute; retuning / larger train share
   needs a new signed run — do not waive thresholds).
 - B1/G1 remain fail-closed until T26 (or honest `result_r` + grade computation
-  from Score Engine thresholds).
+  from Score Engine thresholds without inventing grades).
 - T25 MLflow registry / alias moves still out of scope.
 - Production `baseline_v1` / `baseline_heuristic` serving-image probe not used
   here (peer LGBM only for L1/M1 fairness).
@@ -201,9 +201,10 @@ Skipped — `export_challenger_bundle` refuses non-PASS evaluations. No
 ```bash
 cd /home/app/maxxtrading-model-training
 # preflight: SELECT 1 + CREATE TEMP TABLE via TRAINING_DATABASE_URL (postgresql+psycopg)
+# WRITE_PROBE REJECTED (ReadOnlySqlTransaction)
 uv run python  # run_export_smoke(... n_max=2000, seed=42, FD read-only)
 uv run python  # peer LGBM seed=0; evaluate_challenger(... B1/G1=None)
-uv run pytest tests/test_challenger_eval.py -q
+# export_challenger_bundle / validate_artifact_bundle: skipped (FAIL)
 ```
 
 Secrets, full DSNs, and passwords were never printed.
