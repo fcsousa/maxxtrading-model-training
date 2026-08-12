@@ -1,8 +1,9 @@
 # Challenger Quality V1 Validation
 
 **Date**: 2026-08-12  
+**Iteration**: 2 (re-verify after Fix 1 / `a165dbc`)  
 **Spec**: `.specs/features/challenger-quality-v1/spec.md`  
-**Diff range**: `e8a0732^..HEAD` (`feature/mlflow-p4-challenger-shadow`, 10 commits through `6012849`)  
+**Diff range**: `e8a0732^..HEAD` (`feature/mlflow-p4-challenger-shadow`, 11 commits through `a165dbc`)  
 **Verifier**: independent sub-agent (author ≠ verifier)  
 **Mode**: READ-ONLY on real tree; discrimination mutants only in `/tmp` scratch (discarded)
 
@@ -30,7 +31,7 @@
 
 | Criterion (WHEN X THEN Y) | Spec-defined outcome | `file:line` + assertion | Result |
 | ------------------------- | -------------------- | ----------------------- | ------ |
-| WHEN export/smoke builds batch THEN enforce configurable min full-vector counts; holdout ≥ 200 | `QuotaSpec` rejects `holdout_min < 200`; selection meets mins | `tests/test_quota_batch.py:60-62` — `pytest.raises(ValueError, match="holdout_min")` with `holdout_min=199`; `tests/test_quota_batch.py:80-82` — `holdout_count >= 200` | ⚠️ PASS with weak assert (see sensor M1) |
+| WHEN export/smoke builds batch THEN enforce configurable min full-vector counts; holdout ≥ 200 | `QuotaSpec` rejects `holdout_min < 200`; selection meets mins | `tests/test_quota_batch.py:60-64` — `pytest.raises(ValueError, match=r"holdout_min must be >= 200")` with `holdout_min=199`, `n_max=5000`; `tests/test_quota_batch.py:80-82` — `holdout_count >= 200` | ✅ PASS (floor assert tightened in `a165dbc`) |
 | WHEN quotas unmet THEN fail closed with explicit stop reason | `QuotaBatchError` + sanitized counts; no silent underfill | `tests/test_quota_batch.py:95-111` — raises `QuotaBatchError`; `counts["train"]==1` etc.; no `password`/`DATABASE_URL` in message | ✅ PASS |
 | WHEN temporal window / `train_end` changes THEN new `dataset_id` with manifest fields | Manifest folds window/split/seed/feature_order/deferred/checksums into `dataset_id` | `tests/test_quality_export.py:114-126` — `dataset_id`/`quotas`/`included_categoricals`; `tests/test_dataset_builder.py:129-144` + `163-169` — manifest + deterministic id; `src/training/dataset_builder.py:166-181` — `train_end` in hash payload | ✅ PASS |
 | WHEN selecting packs THEN not solely global top-N; respect partition quotas | `select_quota_batch` fills per-partition mins before `n_max` | `tests/test_quota_batch.py:66-84` — per-partition counts; `src/training/quota_batch.py:152-158` — mins first | ✅ PASS |
@@ -56,7 +57,7 @@
 | WHEN any Q1–M1 FAIL/BLOCKED THEN overall FAIL/BLOCKED and refuse bundle | Overall FAIL; export refused | `tests/test_challenger_eval.py:142-144` — overall FAIL; `:213-215` — `refusing to export`; `src/training/challenger_eval.py:287-292`, `:505-507` | ✅ PASS |
 | WHEN all seven PASS THEN allow export + sanitized evidence path | Synthetic all-PASS; export OK on PASS | `tests/test_challenger_eval.py:278-281` — all PASS + `len(SIGNED_CRITERIA)==7`; `:178-201` — export on PASS | ✅ PASS (unit); Heavy/real sanitized table → T9 pending |
 
-**Independent-test note**: Spec asks isolation FAIL per criterion. Evidence exists for Q1 (`:231-251`), B1 (`:283-310`), missing B1/G1 (`:136-144`). No dedicated isolation tests forcing Q2/Q3/G1/L1/M1 alone → coverage gap (not AC WHEN/THEN zero-evidence).
+**Independent-test note**: Spec asks isolation FAIL per criterion. Evidence exists for Q1 (`:231-251`), B1 (`:283-310`), missing B1/G1 (`:136-144`). No dedicated isolation tests forcing Q2/Q3/G1/L1/M1 alone → residual coverage gap (not AC WHEN/THEN zero-evidence; not blocking this iteration).
 
 ### P2: Score Engine pointer
 
@@ -71,23 +72,24 @@
 | --------- | ------- | -------- | ------ |
 | Optional probe vs `baseline_heuristic` | Deferred optional | tasks.md CQ-14 Deferred | ⏭️ Out of scope / optional |
 
-**Status**: ❌ Gaps present (sensor survival + T9 pending + isolation incompleteness) — code ACs T1–T8 largely ✅
+**Status**: ✅ Code ACs T1–T8 PASS; prior major sensor gap closed; T9/CQ-12 pending AUTH (non-sole FAIL)
 
 ---
 
 ## Discrimination Sensor
 
-Scratch: `/tmp/cq-v1-sensor.*` (temp copy of `src/training`); real tree restored/unmodified. Import forced via `sys.path.insert(0, scratch/src)` + module cache clear.
+Scratch: `/tmp/cq-v1-sensor2.*` (temp copy of `src` + `tests`); real tree unmodified (`quota_batch.py` / `offline_scoring.py` guards intact after cleanup). Import via `PYTHONPATH=<scratch>/src`.
 
 | Mutation | File:line | Description | Killed? |
 | -------- | --------- | ----------- | ------- |
-| M1 | `quota_batch.py:37` | `holdout_min < 200` → `< 100` | ❌ Survived — `test_holdout_min_below_200_raises` still passes because `match="holdout_min"` matches `n_max must be >= ... holdout_min` (`QuotaSpec(..., holdout_min=199, n_max=50)`) |
-| M2 | `quota_batch.py:143` | Underfill gate disabled (`available < mins` → never true) | ✅ Killed — `test_underfill_raises_with_sanitized_counts` DID NOT RAISE |
-| M3 | `offline_scoring.py:139-140` | Empty grade-A returns `0.0` instead of raise | ✅ Killed — `test_empty_grade_a_fail_closed` |
-| M4 (extra) | `challenger_eval.py:287-292` | `overall_verdict` always `"PASS"` | ✅ Killed — GateFailClosed + Q1 isolation |
+| M1 | `quota_batch.py:37` | `holdout_min < 200` → `< 1` | ✅ Killed — `test_holdout_min_below_200_raises` DID NOT RAISE (1 failed, 4 passed) |
+| M3 | `offline_scoring.py:139-140` | Empty grade-A returns `0.0` instead of raise | ✅ Killed — `test_empty_grade_a_fail_closed` DID NOT RAISE (1 failed, 8 passed) |
 
-**Sensor depth**: lightweight (3 primary + 1 extra)  
-**Result**: 3/4 killed, **1 survived** — FAIL ❌ for discrimination
+**Prior iteration M1**: Survived under weak `match="holdout_min"` + small `n_max`.  
+**Fix verified**: `a165dbc` — `match=r"holdout_min must be >= 200"` and `n_max=5000`.
+
+**Sensor depth**: lightweight re-check (2 mutations; focus = prior survivor + optional empty grade-A)  
+**Result**: 2/2 killed — PASS ✅ for discrimination
 
 ---
 
@@ -105,8 +107,8 @@ N/A — backend/offline training feature; automated checks only.
 | Surgical changes | ✅ |
 | No scope creep | ✅ (CQ-14 deferred; no threshold edits; `shadow-acceptance.md` untouched in diff) |
 | Matches patterns | ✅ |
-| Spec-anchored outcome check | ⚠️ M1 weak assert on holdout floor |
-| Per-layer Coverage Expectation | ⚠️ Isolation not 1:1 for every Q2/Q3/G1/L1/M1 |
+| Spec-anchored outcome check | ✅ Holdout floor assert matches spec ≥ 200 |
+| Per-layer Coverage Expectation | ⚠️ Isolation not 1:1 for every Q2/Q3/G1/L1/M1 (residual minor) |
 | Every test maps to a spec requirement | ✅ (feature tests map to CQ / edges) |
 | Documented guidelines | ✅ `CLAUDE.md`, `docs/agent-repo-policy.md`, tasks matrix |
 
@@ -115,7 +117,7 @@ N/A — backend/offline training feature; automated checks only.
 ## Edge Cases
 
 - [x] RO underfill → actionable sanitized counts (`QuotaBatchError.counts`)
-- [x] Holdout below 200 → BLOCKED eval (`test_holdout_below_minimum_is_blocked`) + `QuotaSpec` floor (weak assert)
+- [x] Holdout below 200 → BLOCKED eval (`test_holdout_below_minimum_is_blocked`) + `QuotaSpec` floor (strong assert)
 - [x] Leakage features — existing `feature_export` leakageCheckStatus guards (pre-feature)
 - [x] SE `DATABASE_URL` / scoreengine DB name — `_reject_score_engine_database`
 - [ ] WRITE_PROBE abort — **no code path** in this feature; ops protocol / T9 evidence only
@@ -129,7 +131,7 @@ N/A — backend/offline training feature; automated checks only.
 - **Gate command**: `uv run pytest tests/ -q --tb=line`
 - **Result**: **174 passed**, 0 failed, 0 skipped
 - **Test defs before feature** (`e8a0732^`): 139  
-- **Test defs after** (`HEAD`): 171  
+- **Test defs after** (`HEAD` = `a165dbc`): 171  
 - **Delta**: +32 test functions  
 - **Skipped**: none  
 - **Failures**: none  
@@ -139,20 +141,18 @@ N/A — backend/offline training feature; automated checks only.
 
 ## Fix Plans
 
-### Fix 1: Strengthen holdout_min floor assertion (sensor M1)
+### Fix 1: Strengthen holdout_min floor assertion (sensor M1) — DONE
 
-- **Root cause**: `pytest.raises(..., match="holdout_min")` matches a different `ValueError` from the `n_max >= sum(mins)` check when the floor guard is removed/weakened.
-- **Fix task**: Change test to `match="holdout_min must be >= 200"` **and/or** use `n_max` large enough that only the floor check can fire; add assertion that `QuotaSpec(..., holdout_min=199, n_max=500)` raises the floor error.
-- **Where**: `tests/test_quota_batch.py` (`TestQuotaSpec.test_holdout_min_below_200_raises`)
-- **Verify**: Re-run discrimination mutant M1 → must FAIL the test.
-- **Priority**: Major (surviving mutant)
+- **Root cause**: `pytest.raises(..., match="holdout_min")` matched `n_max must be >= ... holdout_min` when floor guard was weakened.
+- **Fix**: `a165dbc` — `match=r"holdout_min must be >= 200"` + `n_max=5000`.
+- **Verify (iter 2)**: M1 mutant → test FAIL (Killed). ✅
 
-### Fix 2: Isolation FAIL for remaining criteria (Independent Test)
+### Fix 2: Isolation FAIL for remaining criteria (Independent Test) — residual minor
 
 - **Root cause**: Only Q1 and B1 have dedicated isolation paths; Independent Test asks each of seven.
-- **Fix task**: Unit tests forcing Q2, Q3, G1, L1, M1 FAIL in isolation via `gate_challenger_metrics` / injected probe metrics while others PASS; assert `overall_verdict == "FAIL"`.
+- **Fix task**: Unit tests forcing Q2, Q3, G1, L1, M1 FAIL in isolation.
 - **Where**: `tests/test_challenger_eval.py`
-- **Priority**: Minor/Major (Independent Test completeness)
+- **Priority**: Minor (not blocking major sensor / code AC PASS this iteration)
 
 ### Fix 3: T9 Heavy/real + CQ-12 evidence (pending AUTH)
 
@@ -164,35 +164,35 @@ N/A — backend/offline training feature; automated checks only.
 
 ## Requirement Traceability Update
 
-| Requirement | Previous Status | New Status |
-| ----------- | --------------- | ---------- |
-| CQ-01 | Implementing | ⚠️ Verified w/ weak floor assert |
-| CQ-02 | Implementing | ✅ Verified |
-| CQ-03 | Implementing | ✅ Verified |
-| CQ-04 | Implementing | ✅ Verified (best-effort) |
-| CQ-05 | Implementing | ✅ Verified |
-| CQ-06 | Implementing | ✅ Verified |
-| CQ-07 | Implementing | ✅ Verified |
-| CQ-08 | Implementing | ✅ Verified |
-| CQ-09 | Implementing | ✅ Verified |
-| CQ-10 | Implementing | ✅ Verified |
-| CQ-11 | Implementing | ✅ Verified (unit) |
-| CQ-12 | Implementing | ⚠️ Pending AUTH (T9) |
-| CQ-13 | Implementing | ✅ Verified |
-| CQ-14 | Pending optional | ⏭️ Deferred |
+| Requirement | Previous Status (iter 1) | New Status (iter 2) |
+| ----------- | ------------------------ | ------------------- |
+| CQ-01 | ⚠️ Verified w/ weak floor assert | ✅ Verified (strong assert + M1 killed) |
+| CQ-02 | ✅ Verified | ✅ Verified |
+| CQ-03 | ✅ Verified | ✅ Verified |
+| CQ-04 | ✅ Verified (best-effort) | ✅ Verified (best-effort) |
+| CQ-05 | ✅ Verified | ✅ Verified |
+| CQ-06 | ✅ Verified | ✅ Verified |
+| CQ-07 | ✅ Verified | ✅ Verified |
+| CQ-08 | ✅ Verified | ✅ Verified |
+| CQ-09 | ✅ Verified | ✅ Verified |
+| CQ-10 | ✅ Verified | ✅ Verified |
+| CQ-11 | ✅ Verified (unit) | ✅ Verified (unit) |
+| CQ-12 | ⚠️ Pending AUTH (T9) | ⚠️ Pending AUTH (T9) |
+| CQ-13 | ✅ Verified | ✅ Verified |
+| CQ-14 | ⏭️ Deferred | ⏭️ Deferred |
 
 ---
 
 ## Summary
 
-**Overall**: ❌ Not Ready (surviving mutant + T9 pending)
+**Overall**: ✅ Ready for code gate (T1–T8); T9/CQ-12 still pending AUTH
 
-**Spec-anchored check**: 14/15 code ACs matched (P1–P2); 1 weak assert on holdout floor; CQ-12 heavy pending; CQ-14 deferred  
-**Sensor**: 3/4 killed, 1 survived (M1)  
+**Spec-anchored check**: Code ACs P1–P2 matched; CQ-12 heavy pending; CQ-14 deferred  
+**Sensor**: 2/2 killed (prior M1 survivor now Killed; M3 reconfirmed)  
 **Gate**: 174 passed, 0 failed  
 
-**What works**: Quota fail-closed, quality export + cats + encoder bundle, offline B1/G1, full seven-PASS synthetic path, export refuse on FAIL, SE pointer, build gate green.
+**What works**: Quota fail-closed + strong holdout floor assert, quality export + cats + encoder bundle, offline B1/G1, full seven-PASS synthetic path, export refuse on FAIL, SE pointer, build gate green.
 
-**Issues found**: Surviving mutant on holdout floor test; incomplete per-criterion isolation; WRITE_PROBE/non-readonly edge cases not coded; T9/CQ-12 pending AUTH.
+**Issues remaining**: T9/CQ-12 pending AUTH; optional isolation tests for Q2/Q3/G1/L1/M1 (minor); WRITE_PROBE/non-readonly edge cases not coded.
 
-**Next steps**: Fix 1 (strengthen floor test) before re-verify; optionally Fix 2; run T9 only with explicit AUTH.
+**Next steps**: Run T9 only with explicit AUTH; optionally Fix 2 isolation tests.
