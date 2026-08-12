@@ -194,10 +194,10 @@ T9
 
 **Done when**:
 
-- [ ] Grade A/B/C deterministic from thresholds
-- [ ] Empty grade-A set → B1 fail-closed path documented in API
-- [ ] Missing thresholds path → error/FAIL
-- [ ] ≥5 unit tests; quick gate green
+- [x] Grade A/B/C deterministic from thresholds
+- [x] Empty grade-A set → B1 fail-closed path documented in API
+- [x] Missing thresholds path → error/FAIL
+- [x] ≥5 unit tests; quick gate green
 
 **Tests**: unit  
 **Gate**: quick  
@@ -217,10 +217,10 @@ T9
 
 **Done when**:
 
-- [ ] B1/G1 no longer must be injected as None for CQ path
-- [ ] Isolation tests: each criterion can force FAIL
-- [ ] Synthetic path can PASS all seven
-- [ ] Full gate green; no weakened tests
+- [x] B1/G1 no longer must be injected as None for CQ path
+- [x] Isolation tests: each criterion can force FAIL
+- [x] Synthetic path can PASS all seven
+- [x] Full gate green; no weakened tests
 
 **Tests**: unit  
 **Gate**: full  
@@ -240,9 +240,9 @@ T9
 
 **Done when**:
 
-- [ ] Training docs describe quotas/window/cats/gate rules
-- [ ] SE pointer lists path, CQ-IDs, shadow-acceptance-v1 immutability, T26 still separate
-- [ ] No secrets; `git diff --check` clean on touched docs
+- [x] Training docs describe quotas/window/cats/gate rules
+- [x] SE pointer lists path, CQ-IDs, shadow-acceptance-v1 immutability, T26 still separate
+- [x] No secrets; `git diff --check` clean on touched docs
 
 **Tests**: none  
 **Gate**: build (docs check)  
