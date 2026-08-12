@@ -25,13 +25,14 @@ from __future__ import annotations
 
 import math
 from collections.abc import Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
+from training.categorical_encode import DEFAULT_CATEGORICAL_NAMES
 from training.label_export import assert_read_only_sql
 
 _SELECT_TRADE_SAMPLE_PACKS = """
@@ -79,6 +80,7 @@ class PackFeatures:
     features_version: str
     features: dict[str, float]
     pack_run_id: str | None = None
+    categoricals: dict[str, str] = field(default_factory=dict)
 
 
 def export_pack_features(
@@ -154,7 +156,9 @@ def _to_pack_features(
     if not isinstance(global_features, list):
         raise FeatureExportError(f"sample '{sample_id}': globalFeatures is not a list")
 
-    features = _build_features_record(sample_id, [*primary_features, *global_features])
+    features, categoricals = _build_features_record(
+        sample_id, [*primary_features, *global_features]
+    )
     _apply_bridge_enrichment(
         sample_id,
         pack_json,
@@ -169,6 +173,7 @@ def _to_pack_features(
         features_version=str(features_version),
         features=features,
         pack_run_id=pack_run_id,
+        categoricals=categoricals,
     )
 
 
@@ -215,9 +220,7 @@ def _derive_hour_day_from_anchor(
     features.setdefault("day_of_week", float((anchor.weekday() + 1) % 7))
 
 
-def _derive_risk_reward_ratio(
-    entry_price: Any, stop_price: Any, target_price: Any
-) -> float | None:
+def _derive_risk_reward_ratio(entry_price: Any, stop_price: Any, target_price: Any) -> float | None:
     try:
         entry = float(entry_price)
         stop = float(stop_price)
@@ -236,16 +239,19 @@ def _derive_risk_reward_ratio(
     return ratio
 
 
-def _build_features_record(sample_id: str, items: list[Any]) -> dict[str, float]:
+def _build_features_record(
+    sample_id: str, items: list[Any]
+) -> tuple[dict[str, float], dict[str, str]]:
     """Mirror NestJS's buildFeaturesRecord (score-request-builder.util.ts).
 
-    Only items with a string `name` and a string `value` that parses as a
-    finite number are included -- non-numeric values (e.g. categorical
-    {"name": "side", "value": "long"}) are silently skipped, same as
-    online, not an error. A duplicate numeric feature name is a hard error,
-    same as NestJS's feature_name_collision.
+    Numeric string values feed ``features``. Non-numeric string values for
+    challenger categorical names (``trend_regime`` / ``volatility_regime``)
+    are captured in ``categoricals`` for CQ encode (CQ-05). Other
+    non-numeric names are skipped, same as online.
     """
     features: dict[str, float] = {}
+    categoricals: dict[str, str] = {}
+    cat_names = frozenset(DEFAULT_CATEGORICAL_NAMES)
     for item in items:
         if not isinstance(item, dict):
             raise FeatureExportError(f"sample '{sample_id}': feature item is not an object")
@@ -256,6 +262,12 @@ def _build_features_record(sample_id: str, items: list[Any]) -> dict[str, float]
         try:
             numeric_value = float(value)
         except ValueError:
+            if name in cat_names:
+                if name in categoricals:
+                    raise FeatureExportError(
+                        f"sample '{sample_id}': duplicate feature name '{name}'"
+                    ) from None
+                categoricals[name] = value
             continue
         if not math.isfinite(numeric_value):
             continue
@@ -263,4 +275,4 @@ def _build_features_record(sample_id: str, items: list[Any]) -> dict[str, float]
             raise FeatureExportError(f"sample '{sample_id}': duplicate feature name '{name}'")
         features[name] = numeric_value
 
-    return features
+    return features, categoricals

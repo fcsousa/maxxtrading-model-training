@@ -1,0 +1,29 @@
+{
+  "weights": {
+    "probabilityWin": 0.5,
+    "expectedR": 0.3,
+    "confidence": 0.2
+  },
+  "grades": {
+    "A": {
+      "minScore": 75,
+      "minExpectedR": 0.25,
+      "minConfidence": 0.65
+    },
+    "B": {
+      "minScore": 55,
+      "maxScore": 74,
+      "minExpectedR": 0.0,
+      "minConfidence": 0.5
+    }
+  },
+  "decisionHintMap": {
+    "A": "eligible",
+    "B": "review",
+    "C": "rejected"
+  },
+  "reasons": {
+    "minRiskRewardRatio": 1.5,
+    "lowConfidenceThreshold": 0.5
+  }
+}
