@@ -58,8 +58,10 @@ def _make_partitioned(
 
 class TestQuotaSpec:
     def test_holdout_min_below_200_raises(self) -> None:
-        with pytest.raises(ValueError, match="holdout_min"):
-            QuotaSpec(train_min=10, validation_min=5, holdout_min=199, n_max=50)
+        # n_max must clear train+val+holdout so only the holdout floor fires
+        # (otherwise match="holdout_min" also matches the n_max error text).
+        with pytest.raises(ValueError, match=r"holdout_min must be >= 200"):
+            QuotaSpec(train_min=10, validation_min=5, holdout_min=199, n_max=5000)
 
 
 class TestSelectQuotaBatch:
